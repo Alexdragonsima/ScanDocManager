@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.ScanDoc.Dark" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#818CF8</item>
+        <item name="colorPrimaryDark">#6366F1</item>
+        <item name="colorAccent">#FBBF24</item>
+        <item name="android:windowBackground">#0D1117</item>
+        <item name="colorSurface">#161B22</item>
+        <item name="colorOnSurface">#F0F6FC</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+
+    </style>
+</resources>
