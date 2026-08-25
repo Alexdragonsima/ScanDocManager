@@ -1,4 +1,3 @@
-<?xml version="1.0" encoding="utf-8"?>
 <androidx.cardview.widget.CardView
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -20,6 +19,7 @@
             android:layout_width="50dp"
             android:layout_height="68dp"
             android:scaleType="centerCrop"
+            android:src="@drawable/placeholder_pdf"
             android:background="@drawable/preview_border"/>
 
         <LinearLayout
@@ -33,7 +33,6 @@
                 android:id="@+id/documentTitle"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Документ"
                 android:textSize="15sp"
                 android:textStyle="bold"
                 android:textColor="@color/text_primary"/>
@@ -42,19 +41,16 @@
                 android:id="@+id/documentDate"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="01.01.2025"
                 android:textSize="11sp"
                 android:textColor="@color/text_secondary"/>
         </LinearLayout>
 
-        <!-- Три точки -->
-        <TextView
+        <ImageView
             android:id="@+id/menuButton"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:text="⋮"
-            android:textSize="24sp"
-            android:gravity="center"
-            android:textColor="@color/text_secondary"/>
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_more_vert"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Меню"/>
     </LinearLayout>
 </androidx.cardview.widget.CardView>

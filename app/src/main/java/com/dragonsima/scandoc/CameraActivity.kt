@@ -3,8 +3,6 @@ package com.dragonsima.scandoc
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Matrix
-import android.graphics.Rect
-import android.graphics.YuvImage
 import android.os.Bundle
 import android.util.Log
 import android.view.View
@@ -18,18 +16,20 @@ import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import org.opencv.android.Utils
 import org.opencv.core.Mat
 import org.opencv.core.Point
 import org.opencv.imgcodecs.Imgcodecs
-import java.io.ByteArrayOutputStream
 import java.io.File
-import java.util.concurrent.Executors
+import java.util.concurrent.*
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
-import kotlin.math.min
 
 class CameraActivity : AppCompatActivity() {
 
-    // Объявления переменных
+    // UI элементы
     private lateinit var previewView: PreviewView
     private lateinit var overlay: OverlayView
     private lateinit var captureButton: Button
@@ -41,51 +41,83 @@ class CameraActivity : AppCompatActivity() {
     private lateinit var backButton: Button
     private lateinit var progressBar: ProgressBar
 
-    private val executor = Executors.newSingleThreadExecutor()
-    private var isProcessing = false
+    // Камера
+    private lateinit var cameraProvider: ProcessCameraProvider
     private var imageCapture: ImageCapture? = null
-    private var processedPhotoFile: File? = null
-    private var frameCounter = 0
 
-    // Сохраняем последние найденные углы
-    private var lastDetectedCorners: Array<Point>? = null
-    private var lastImageWidth = 0
-    private var lastImageHeight = 0
-    private var currentResultImage: Mat? = null
-    private var originalCapturedImage: Mat? = null
+    // Исполнители (разделены по назначению)
+    private val analysisExecutor = Executors.newSingleThreadExecutor()
+    private val processingExecutor = Executors.newSingleThreadExecutor()
+    private val saveExecutor = Executors.newSingleThreadExecutor()
 
-    companion object {
-        private const val TAG = "CameraActivity"
-    }
+    // Потокобезопасные данные
+    private val isProcessing = AtomicBoolean(false)
+    private val lastDetectedCorners = AtomicReference<Array<Point>?>(null)
+    private val lastImageWidth = AtomicLong(0)
+    private val lastImageHeight = AtomicLong(0)
 
+    // Пути к файлам (безопасно для многопоточности)
+    private val originalImagePath = AtomicReference<String?>(null)
+    private val processedImagePath = AtomicReference<String?>(null)
+    private val currentResultBitmap = AtomicReference<Bitmap?>(null)
+
+    // Троттлинг анализа кадров
+    private val lastFrameProcessedTime = AtomicLong(0L)
+    private val minFrameIntervalMs = 300L
+
+    // Разрешение камеры
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
-        if (isGranted) {
-            startCamera()
-        } else {
+        if (isGranted) startCamera()
+        else {
             Toast.makeText(this, "Нет разрешения на камеру", Toast.LENGTH_LONG).show()
             finish()
         }
     }
 
+    // Ручная обрезка
+    private val cropResultLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val tempFilePath = result.data?.getStringExtra("tempFilePath")
+        try {
+            if (result.resultCode == RESULT_OK) {
+                val corners = result.data?.getFloatArrayExtra("corners")
+                val originalPath = originalImagePath.get()
+                if (corners != null && corners.size == 8 && originalPath != null) {
+                    val points = Array(4) { i ->
+                        Point(corners[i * 2].toDouble(), corners[i * 2 + 1].toDouble())
+                    }
+                    processImageFromPath(originalPath, points)
+                }
+            }
+        } finally {
+            tempFilePath?.let { File(it).delete() }
+        }
+    }
+
+    companion object {
+        private const val TAG = "CameraActivity"
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_camera)
-
-        // Инициализация всех View
         initViews()
-
-        // Настройка кнопок
         setupButtons()
-
-        // Запуск камеры
-        if (hasCameraPermission()) {
-            startCamera()
-        } else {
-            requestPermissionLauncher.launch(android.Manifest.permission.CAMERA)
-        }
+        if (hasCameraPermission()) startCamera()
+        else requestPermissionLauncher.launch(android.Manifest.permission.CAMERA)
     }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        shutdownExecutors()
+        releaseResources()
+        FileManager.cleanCache(this) // ← добавить
+    }
+
+    // ----- Инициализация UI -----
 
     private fun initViews() {
         previewView = findViewById(R.id.previewView)
@@ -101,7 +133,6 @@ class CameraActivity : AppCompatActivity() {
 
         previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
 
-        // Скрываем кнопки действий изначально
         actionsLayout.visibility = View.GONE
         retakeButton.visibility = View.GONE
         cropButton.visibility = View.GONE
@@ -110,31 +141,14 @@ class CameraActivity : AppCompatActivity() {
     }
 
     private fun setupButtons() {
-        // Кнопка назад
-        backButton.setOnClickListener {
-            finish()
-        }
-
-        // Кнопка съёмки
-        captureButton.setOnClickListener {
-            takePicture()
-        }
-
-        // Кнопка сохранения
-        saveResultButton.setOnClickListener {
-            saveDocument()
-        }
-
-        // Кнопка переснять
-        retakeButton.setOnClickListener {
-            retakePicture()
-        }
-
-        // Кнопка обрезать
-        cropButton.setOnClickListener {
-            cropDocument()
-        }
+        backButton.setOnClickListener { finish() }
+        captureButton.setOnClickListener { takePicture() }
+        saveResultButton.setOnClickListener { saveDocument() }
+        retakeButton.setOnClickListener { retakePicture() }
+        cropButton.setOnClickListener { cropDocument() }
     }
+
+    // ----- Разрешения и запуск камеры -----
 
     private fun hasCameraPermission(): Boolean {
         return ContextCompat.checkSelfPermission(
@@ -147,53 +161,70 @@ class CameraActivity : AppCompatActivity() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
             try {
-                val cameraProvider = cameraProviderFuture.get()
+                cameraProvider = cameraProviderFuture.get()
 
-                val preview = Preview.Builder().build()
-                preview.setSurfaceProvider(previewView.surfaceProvider)
+                val preview = Preview.Builder().build().also {
+                    it.setSurfaceProvider(previewView.surfaceProvider)
+                }
 
                 val imageAnalysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+                    .setTargetResolution(android.util.Size(640, 480))
                     .build()
 
-                imageAnalysis.setAnalyzer(executor) { imageProxy ->
-                    if (!isProcessing) {
-                        isProcessing = true
+                imageAnalysis.setAnalyzer(analysisExecutor) { imageProxy ->
+                    val now = System.currentTimeMillis()
+                    if (now - lastFrameProcessedTime.get() < minFrameIntervalMs) {
+                        imageProxy.close()
+                        return@setAnalyzer
+                    }
+                    lastFrameProcessedTime.set(now)
+
+                    if (isProcessing.compareAndSet(false, true)) {
                         try {
                             processFrame(imageProxy)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Frame processing error", e)
                         } finally {
-                            isProcessing = false
+                            isProcessing.set(false)
                         }
                     } else {
                         imageProxy.close()
                     }
                 }
 
-                val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-
-                cameraProvider.unbindAll()
                 imageCapture = ImageCapture.Builder()
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
                     .build()
-                cameraProvider.bindToLifecycle(
-                    this, cameraSelector, preview, imageAnalysis, imageCapture
-                )
 
-                Log.d(TAG, "Camera started successfully")
+                cameraProvider.unbindAll()
+                cameraProvider.bindToLifecycle(
+                    this,
+                    CameraSelector.DEFAULT_BACK_CAMERA,
+                    preview,
+                    imageAnalysis,
+                    imageCapture
+                )
+                Log.d(TAG, "Camera started")
             } catch (e: Exception) {
-                Log.e(TAG, "Ошибка запуска камеры: ${e.message}", e)
+                Log.e(TAG, "Camera start error", e)
+                runOnUiThread {
+                    Toast.makeText(this, "Не удалось запустить камеру", Toast.LENGTH_LONG).show()
+                    finish()
+                }
             }
         }, ContextCompat.getMainExecutor(this))
     }
 
+    // ----- Съёмка -----
+
     private fun takePicture() {
         val capture = imageCapture ?: run {
-            Log.e(TAG, "imageCapture is null")
+            Toast.makeText(this, "Камера не готова", Toast.LENGTH_SHORT).show()
             return
         }
 
-        // Показываем прогресс
         progressBar.visibility = View.VISIBLE
         captureButton.isEnabled = false
 
@@ -205,329 +236,351 @@ class CameraActivity : AppCompatActivity() {
             ContextCompat.getMainExecutor(this),
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                    // Обработка в фоновом потоке
-                    Thread {
-                        val processed = processCapturedImage(photoFile, lastDetectedCorners)
+                    originalImagePath.set(photoFile.absolutePath)
+                    processingExecutor.execute {
+                        try {
+                            val detected = lastDetectedCorners.get()
+                            val imgWidth = lastImageWidth.get().toInt()
+                            val imgHeight = lastImageHeight.get().toInt()
+                            val processedBitmap = processCapturedImage(photoFile.absolutePath, detected, imgWidth, imgHeight)
 
-                        runOnUiThread {
-                            progressBar.visibility = View.GONE
-                            captureButton.isEnabled = true
-
-                            if (processed != null) {
-                                currentResultImage = processed
-                                val resultBitmap = FileManager.matToBitmap(processed)
-                                showResult(resultBitmap)
-                            } else {
-                                Toast.makeText(
-                                    this@CameraActivity,
-                                    "Не удалось обработать фото",
-                                    Toast.LENGTH_SHORT
-                                ).show()
+                            // Проверяем, что путь к оригиналу не изменился (гонка)
+                            val currentOriginal = originalImagePath.get()
+                            runOnUiThread {
+                                progressBar.visibility = View.GONE
+                                captureButton.isEnabled = true
+                                if (processedBitmap != null && currentOriginal == photoFile.absolutePath) {
+                                    currentResultBitmap.set(processedBitmap)
+                                    showResult()
+                                } else if (processedBitmap == null) {
+                                    Toast.makeText(this@CameraActivity, "Не удалось обработать фото", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    // Результат устарел
+                                    processedBitmap.recycle()
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Processing error", e)
+                            runOnUiThread {
+                                progressBar.visibility = View.GONE
+                                captureButton.isEnabled = true
+                                Toast.makeText(this@CameraActivity, "Ошибка обработки", Toast.LENGTH_SHORT).show()
                             }
                         }
-                    }.start()
+                    }
                 }
 
                 override fun onError(exception: ImageCaptureException) {
                     runOnUiThread {
                         progressBar.visibility = View.GONE
                         captureButton.isEnabled = true
+                        Toast.makeText(this@CameraActivity, "Ошибка съёмки: ${exception.message}", Toast.LENGTH_LONG).show()
                     }
-                    Log.e(TAG, "Съёмка не удалась: ${exception.message}", exception)
-                    Toast.makeText(
-                        this@CameraActivity,
-                        "Ошибка съёмки: ${exception.message}",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    Log.e(TAG, "Capture error", exception)
                 }
             }
         )
     }
 
-    private fun showResult(bitmap: Bitmap) {
+    // ----- Обработка кадра анализа (превью) -----
+
+    private fun processFrame(imageProxy: ImageProxy) {
+        val bitmap = imageProxy.toBitmap()
+        if (bitmap == null) {
+            imageProxy.close()
+            return
+        }
+
+        val rotation = imageProxy.imageInfo.rotationDegrees
+        val rotatedBitmap = if (rotation != 0) {
+            val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
+            Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+                .also { bitmap.recycle() }
+        } else bitmap
+
+        val mat = Mat()
+        try {
+            Utils.bitmapToMat(rotatedBitmap, mat)
+            if (mat.empty()) return
+
+            val corners = DocumentDetector.findDocumentCorners(mat)
+            if (corners != null && corners.size == 4 && previewView.width > 0 && previewView.height > 0) {
+                val cornersCopy = corners.map { Point(it.x, it.y) }.toTypedArray()
+                lastDetectedCorners.set(cornersCopy)
+                lastImageWidth.set(rotatedBitmap.width.toLong())
+                lastImageHeight.set(rotatedBitmap.height.toLong())
+
+                val screenCorners = transformCornersToView(
+                    cornersCopy,
+                    previewView.width,
+                    previewView.height,
+                    rotatedBitmap.width,
+                    rotatedBitmap.height
+                )
+                runOnUiThread { overlay.setCorners(screenCorners) }
+            } else {
+                runOnUiThread { overlay.setCorners(null) }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "processFrame error", e)
+        } finally {
+            mat.release()
+            rotatedBitmap.recycle()
+            imageProxy.close()
+        }
+    }
+
+    // ----- Обработка захваченного изображения -----
+
+    private fun processCapturedImage(
+        imagePath: String,
+        detectedCorners: Array<Point>?,
+        imgWidth: Int,
+        imgHeight: Int
+    ): Bitmap? {
+        if (!File(imagePath).exists()) {
+            Log.w(TAG, "File not found: $imagePath")
+            return null
+        }
+
+        val image = Imgcodecs.imread(imagePath)
+        if (image.empty()) {
+            image.release()
+            return null
+        }
+
+        var resultBitmap: Bitmap? = null
+
+        try {
+            val processedMat = if (detectedCorners != null && detectedCorners.size == 4 && imgWidth > 0 && imgHeight > 0) {
+                val scaleX = image.cols().toDouble() / imgWidth
+                val scaleY = image.rows().toDouble() / imgHeight
+                val scaledCorners = Array(4) { i ->
+                    Point(detectedCorners[i].x * scaleX, detectedCorners[i].y * scaleY)
+                }
+                processImageWithCorners(image, scaledCorners)
+            } else {
+                val corners = DocumentDetector.findDocumentCorners(image)
+                if (corners != null && corners.size == 4) {
+                    processImageWithCorners(image, corners)
+                } else {
+                    DocumentDetector.enhanceScan(image, "bw")
+                }
+            }
+
+            if (processedMat != null) {
+                val processedFile = File(cacheDir, "processed_${System.currentTimeMillis()}.jpg")
+                if (Imgcodecs.imwrite(processedFile.absolutePath, processedMat)) {
+                    processedImagePath.set(processedFile.absolutePath)
+                    resultBitmap = FileManager.matToBitmap(processedMat)
+                }
+                processedMat.release()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "processCapturedImage error", e)
+        } finally {
+            image.release()
+        }
+
+        return resultBitmap
+    }
+
+    private fun processImageWithCorners(image: Mat, corners: Array<Point>): Mat? {
+        var warped: Mat? = null
+        var noShadows: Mat? = null
+        var cropped: Mat? = null
+        var enhanced: Mat? = null
+
+        try {
+            warped = DocumentDetector.warpDocument(image, corners) ?: return null
+            noShadows = DocumentDetector.removeShadows(warped)
+            cropped = DocumentDetector.autoCropMargins(noShadows) ?: return null
+            enhanced = DocumentDetector.enhanceScan(cropped, "bw")
+            return enhanced
+        } finally {
+            warped?.release()
+            noShadows?.release()
+            cropped?.release()
+        }
+    }
+
+    // ----- Отображение результата -----
+
+    private fun showResult() {
         previewView.visibility = View.GONE
         overlay.visibility = View.GONE
         captureButton.visibility = View.GONE
-
         resultImageView.visibility = View.VISIBLE
-        resultImageView.setImageBitmap(bitmap)
-
+        resultImageView.setImageBitmap(currentResultBitmap.get())
         actionsLayout.visibility = View.VISIBLE
         retakeButton.visibility = View.VISIBLE
         cropButton.visibility = View.VISIBLE
         saveResultButton.visibility = View.VISIBLE
     }
 
-    private fun retakePicture() {
-        // Очищаем результат
-        currentResultImage?.release()
-        currentResultImage = null
-        originalCapturedImage?.release()
-        originalCapturedImage = null
-        processedPhotoFile = null
-        lastDetectedCorners = null
+    private fun setResultBitmap(newBitmap: Bitmap?) {
+        currentResultBitmap.getAndSet(null)?.recycle()
+        currentResultBitmap.set(newBitmap)
+    }
 
-        // Показываем камеру
+    private fun deleteFileIfExists(path: String?) {
+        path?.let { File(it).delete() }
+    }
+
+    private fun retakePicture() {
+        // Не удаляем файлы, просто обнуляем ссылки (файлы будут удалены позже или системой)
+        originalImagePath.set(null)
+        processedImagePath.set(null)
+        setResultBitmap(null)
+
+        lastDetectedCorners.set(null)
+        lastImageWidth.set(0)
+        lastImageHeight.set(0)
+
         previewView.visibility = View.VISIBLE
         overlay.visibility = View.VISIBLE
         captureButton.visibility = View.VISIBLE
-
-        // Скрываем результат и кнопки
         resultImageView.visibility = View.GONE
         actionsLayout.visibility = View.GONE
         retakeButton.visibility = View.GONE
         cropButton.visibility = View.GONE
         saveResultButton.visibility = View.GONE
-
-        startCamera()
+        overlay.setCorners(null)
     }
 
+    // ----- Сохранение PDF -----
+
     private fun saveDocument() {
-        val image = currentResultImage ?: run {
+        val path = processedImagePath.get()
+        if (path == null || !File(path).exists()) {
             Toast.makeText(this, "Нет изображения для сохранения", Toast.LENGTH_SHORT).show()
             return
         }
 
-        try {
-            val pdfFile = FileManager.saveToPdf(this, image)
+        progressBar.visibility = View.VISIBLE
+        saveResultButton.isEnabled = false
 
-            val resultIntent = Intent().apply {
-                putExtra("savedPdfPath", pdfFile.absolutePath)
-                putExtra("savedPdfName", pdfFile.name)
+        saveExecutor.execute {
+            val image = Imgcodecs.imread(path)
+            if (image.empty()) {
+                image.release()
+                runOnUiThread {
+                    progressBar.visibility = View.GONE
+                    saveResultButton.isEnabled = true
+                    Toast.makeText(this, "Ошибка чтения изображения", Toast.LENGTH_SHORT).show()
+                }
+                return@execute
             }
-            setResult(RESULT_OK, resultIntent)
 
-            Toast.makeText(this, "✅ Документ сохранён: ${pdfFile.name}", Toast.LENGTH_LONG).show()
-
-            finish()
-        } catch (e: Exception) {
-            Log.e(TAG, "Save error: ${e.message}", e)
-            Toast.makeText(this, "Ошибка сохранения: ${e.message}", Toast.LENGTH_LONG).show()
+            try {
+                val pdfFile = FileManager.saveToPdf(this, image)
+                val resultIntent = Intent().apply {
+                    putExtra("savedPdfPath", pdfFile.absolutePath)
+                    putExtra("savedPdfName", pdfFile.name)
+                }
+                runOnUiThread {
+                    progressBar.visibility = View.GONE
+                    saveResultButton.isEnabled = true
+                    setResult(RESULT_OK, resultIntent)
+                    Toast.makeText(this, "✅ Сохранено: ${pdfFile.name}", Toast.LENGTH_LONG).show()
+                    finish()
+                }
+                // Удаляем обработанный файл после успешного сохранения
+                deleteFileIfExists(path)
+                processedImagePath.set(null)
+            } catch (e: Exception) {
+                Log.e(TAG, "Save error", e)
+                runOnUiThread {
+                    progressBar.visibility = View.GONE
+                    saveResultButton.isEnabled = true
+                    Toast.makeText(this, "Ошибка сохранения: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                image.release()
+            }
         }
     }
 
+    // ----- Ручная обрезка -----
+
     private fun cropDocument() {
-        val originalImage = originalCapturedImage ?: run {
+        val originalPath = originalImagePath.get()
+        if (originalPath == null || !File(originalPath).exists()) {
             Toast.makeText(this, "Нет изображения для обрезки", Toast.LENGTH_SHORT).show()
             return
         }
 
+        // Создаём временную копию
         val tempFile = File(cacheDir, "crop_temp_${System.currentTimeMillis()}.jpg")
-        Imgcodecs.imwrite(tempFile.absolutePath, originalImage)
-
-        val cropIntent = Intent(this, CropActivity::class.java).apply {
-            putExtra("imagePath", tempFile.absolutePath)
-
-            if (lastDetectedCorners != null && lastDetectedCorners!!.size == 4) {
-                val cornersArray = FloatArray(8)
-                for (i in 0..3) {
-                    cornersArray[i * 2] = lastDetectedCorners!![i].x.toFloat()
-                    cornersArray[i * 2 + 1] = lastDetectedCorners!![i].y.toFloat()
-                }
-                putExtra("corners", cornersArray)
+        try {
+            File(originalPath).copyTo(tempFile, overwrite = true)
+            if (!tempFile.exists() || tempFile.length() == 0L) {
+                Toast.makeText(this, "Ошибка копирования", Toast.LENGTH_SHORT).show()
+                return
             }
-        }
-
-        cropResultLauncher.launch(cropIntent)
-    }
-
-    private val cropResultLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == RESULT_OK) {
-            val corners = result.data?.getFloatArrayExtra("corners")
-            if (corners != null && corners.size == 8 && originalCapturedImage != null) {
-                val points = Array(4) { i ->
-                    Point(corners[i * 2].toDouble(), corners[i * 2 + 1].toDouble())
-                }
-
-                val warped = DocumentDetector.warpDocument(originalCapturedImage!!, points)
-                val noShadows = DocumentDetector.removeShadows(warped)
-                val cropped = DocumentDetector.autoCropMargins(noShadows)
-                val enhanced = DocumentDetector.enhanceScan(cropped, "bw")
-
-                currentResultImage?.release()
-                currentResultImage = enhanced
-
-                val resultBitmap = FileManager.matToBitmap(enhanced)
-                runOnUiThread {
-                    showResult(resultBitmap)
-                }
-
-                warped.release()
-                noShadows.release()
-                cropped.release()
-            }
-        }
-    }
-
-    private fun processFrame(imageProxy: ImageProxy) {
-        frameCounter++
-
-        val bitmap = imageProxyToBitmap(imageProxy)
-        if (bitmap == null) {
-            imageProxy.close()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Ошибка копирования", Toast.LENGTH_SHORT).show()
             return
         }
 
-        val mat = Mat()
-        try {
-            org.opencv.android.Utils.bitmapToMat(bitmap, mat)
-            if (mat.empty()) return
-
-            val corners = DocumentDetector.findDocumentCorners(mat)
-
-            if (corners.size == 4 && previewView.width > 0 && previewView.height > 0) {
-                lastDetectedCorners = corners
-                lastImageWidth = bitmap.width
-                lastImageHeight = bitmap.height
-
-                val screenCorners = transformCornersToView(
-                    corners,
-                    previewView.width,
-                    previewView.height,
-                    bitmap.width,
-                    bitmap.height
-                )
-
-                runOnUiThread {
-                    overlay.setCorners(screenCorners)
-                }
-            } else {
-                runOnUiThread {
-                    overlay.setCorners(null)
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "processFrame error: ${e.message}", e)
-        } finally {
-            mat.release()
-            bitmap.recycle()
-            imageProxy.close()
+        val cropIntent = Intent(this, CropActivity::class.java).apply {
+            putExtra("imagePath", tempFile.absolutePath)
+            putExtra("tempFilePath", tempFile.absolutePath) // будет удалён после возврата
         }
+        cropResultLauncher.launch(cropIntent)
     }
 
-    private fun imageProxyToBitmap(imageProxy: ImageProxy): Bitmap? {
-        try {
-            val width = imageProxy.width
-            val height = imageProxy.height
-
-            val yBuffer = imageProxy.planes[0].buffer
-            val ySize = yBuffer.remaining()
-            val yBytes = ByteArray(ySize)
-            yBuffer.get(yBytes)
-
-            val uBuffer = imageProxy.planes[1].buffer
-            val vBuffer = imageProxy.planes[2].buffer
-            val uSize = uBuffer.remaining()
-            val vSize = vBuffer.remaining()
-
-            val nv21 = ByteArray(ySize + vSize + uSize)
-            System.arraycopy(yBytes, 0, nv21, 0, ySize)
-
-            val vBytes = ByteArray(vSize)
-            val uBytes = ByteArray(uSize)
-            vBuffer.get(vBytes)
-            uBuffer.get(uBytes)
-
-            var index = ySize
-            val maxSize = minOf(uSize, vSize)
-            for (i in 0 until maxSize) {
-                nv21[index++] = vBytes[i]
-                nv21[index++] = uBytes[i]
-            }
-
-            val yuv = YuvImage(
-                nv21,
-                android.graphics.ImageFormat.NV21,
-                width,
-                height,
-                null
-            )
-
-            val out = ByteArrayOutputStream()
-            yuv.compressToJpeg(Rect(0, 0, width, height), 70, out)
-            val jpegBytes = out.toByteArray()
-
-            val bitmap = android.graphics.BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
-                ?: return null
-
-            val rotation = imageProxy.imageInfo.rotationDegrees
-            if (rotation != 0) {
-                val matrix = Matrix()
-                matrix.postRotate(rotation.toFloat())
-                val rotated = Bitmap.createBitmap(
-                    bitmap, 0, 0,
-                    bitmap.width, bitmap.height,
-                    matrix, true
-                )
-                bitmap.recycle()
-                return rotated
-            }
-            return bitmap
-
-        } catch (e: Exception) {
-            Log.e(TAG, "imageProxyToBitmap error: ${e.message}", e)
-            return null
-        }
-    }
-
-    private fun processCapturedImage(photoFile: File, detectedCorners: Array<Point>?): Mat? {
-        try {
-            val image = Imgcodecs.imread(photoFile.absolutePath)
-            if (image.empty()) {
-                Log.e(TAG, "Failed to load image: ${photoFile.absolutePath}")
-                return null
-            }
-
-            originalCapturedImage?.release()
-            originalCapturedImage = image.clone()
-
-            val result: Mat
-
-            if (detectedCorners != null && detectedCorners.size == 4) {
-                val scaleX = image.cols().toDouble() / lastImageWidth
-                val scaleY = image.rows().toDouble() / lastImageHeight
-
-                val scaledCorners = Array(4) { i ->
-                    Point(
-                        detectedCorners[i].x * scaleX,
-                        detectedCorners[i].y * scaleY
-                    )
+    private fun processImageFromPath(originalPath: String, corners: Array<Point>) {
+        processingExecutor.execute {
+            try {
+                if (!File(originalPath).exists()) {
+                    Log.w(TAG, "Original file not found")
+                    runOnUiThread { Toast.makeText(this, "Файл не найден", Toast.LENGTH_SHORT).show() }
+                    return@execute
                 }
 
-                val warped = DocumentDetector.warpDocument(image, scaledCorners)
-                val noShadows = DocumentDetector.removeShadows(warped)
-                val cropped = DocumentDetector.autoCropMargins(noShadows)
-                result = DocumentDetector.enhanceScan(cropped, "bw")
+                val image = Imgcodecs.imread(originalPath)
+                if (image.empty()) {
+                    image.release()
+                    runOnUiThread { Toast.makeText(this, "Ошибка чтения", Toast.LENGTH_SHORT).show() }
+                    return@execute
+                }
 
-                warped.release()
-                noShadows.release()
-                cropped.release()
-            } else {
-                val corners = DocumentDetector.findDocumentCorners(image)
+                val processedMat = processImageWithCorners(image, corners)
+                image.release()
 
-                if (corners.size == 4) {
-                    val warped = DocumentDetector.warpDocument(image, corners)
-                    val noShadows = DocumentDetector.removeShadows(warped)
-                    val cropped = DocumentDetector.autoCropMargins(noShadows)
-                    result = DocumentDetector.enhanceScan(cropped, "bw")
+                if (processedMat != null) {
+                    val processedFile = File(cacheDir, "processed_${System.currentTimeMillis()}.jpg")
+                    if (Imgcodecs.imwrite(processedFile.absolutePath, processedMat)) {
+                        processedImagePath.set(processedFile.absolutePath)
+                        val bitmap = FileManager.matToBitmap(processedMat)
+                        processedMat.release()
 
-                    warped.release()
-                    noShadows.release()
-                    cropped.release()
+                        // Проверяем, что путь к оригиналу не изменился
+                        if (originalImagePath.get() == originalPath) {
+                            runOnUiThread {
+                                setResultBitmap(bitmap)
+                                showResult()
+                            }
+                        } else {
+                            bitmap.recycle()
+                            processedFile.delete()
+                        }
+                    } else {
+                        processedMat.release()
+                        runOnUiThread { Toast.makeText(this, "Ошибка сохранения", Toast.LENGTH_SHORT).show() }
+                    }
                 } else {
-                    result = DocumentDetector.enhanceScan(image, "bw")
+                    runOnUiThread { Toast.makeText(this, "Ошибка обработки", Toast.LENGTH_SHORT).show() }
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "processImageFromPath error", e)
+                runOnUiThread { Toast.makeText(this, "Ошибка", Toast.LENGTH_SHORT).show() }
             }
-
-            image.release()
-            return result
-        } catch (e: Exception) {
-            Log.e(TAG, "processCapturedImage error: ${e.message}", e)
-            return null
         }
     }
+
+    // ----- Трансформация углов для отображения -----
 
     private fun transformCornersToView(
         corners: Array<Point>?,
@@ -542,22 +595,37 @@ class CameraActivity : AppCompatActivity() {
         val scaleX = viewWidth.toFloat() / imageWidth
         val scaleY = viewHeight.toFloat() / imageHeight
         val scale = max(scaleX, scaleY)
-
-        val offsetX = (viewWidth - imageWidth * scale) / 2
-        val offsetY = (viewHeight - imageHeight * scale) / 2
+        val offsetX = (viewWidth - imageWidth * scale) / 2f
+        val offsetY = (viewHeight - imageHeight * scale) / 2f
 
         return Array(4) { i ->
-            Point(
-                corners[i].x * scale + offsetX,
-                corners[i].y * scale + offsetY
-            )
+            Point(corners[i].x * scale + offsetX, corners[i].y * scale + offsetY)
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        executor.shutdown()
-        currentResultImage?.release()
-        originalCapturedImage?.release()
+    // ----- Завершение работы -----
+
+    private fun shutdownExecutors() {
+        analysisExecutor.shutdown()
+        processingExecutor.shutdown()
+        saveExecutor.shutdown()
+
+        try {
+            if (!analysisExecutor.awaitTermination(1, TimeUnit.SECONDS)) analysisExecutor.shutdownNow()
+            if (!processingExecutor.awaitTermination(2, TimeUnit.SECONDS)) processingExecutor.shutdownNow()
+            if (!saveExecutor.awaitTermination(2, TimeUnit.SECONDS)) saveExecutor.shutdownNow()
+        } catch (e: InterruptedException) {
+            analysisExecutor.shutdownNow()
+            processingExecutor.shutdownNow()
+            saveExecutor.shutdownNow()
+            Thread.currentThread().interrupt()
+        }
+    }
+
+    private fun releaseResources() {
+        currentResultBitmap.getAndSet(null)?.recycle()
+        originalImagePath.set(null)
+        processedImagePath.set(null)
+        DocumentDetector.release()
     }
 }

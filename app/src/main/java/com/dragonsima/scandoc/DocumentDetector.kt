@@ -1,1035 +1,1036 @@
 package com.dragonsima.scandoc
 
 import org.opencv.core.*
-import org.opencv.core.Core
-import org.opencv.core.Mat
-import org.opencv.geometry.Geometry
-import org.opencv.core.Rect
 import org.opencv.imgproc.Imgproc
-import org.opencv.core.MatOfPoint2f
-import org.opencv.imgcodecs.Imgcodecs
 import android.util.Log
+import org.opencv.geometry.Geometry
 import kotlin.math.*
+import java.util.concurrent.*
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.write
 
 object DocumentDetector {
-
-    var totalAttempts = 0
-    var successCount = 0
-    var fallbackCount = 0
-    private var maxSharpness = 0.0
-    private var previousCorners: Array<Point>? = null
-    private var frameCounter = 0
-    private var lastValidCorners: Array<Point>? = null
-    private var stuckCounter = 0
     private const val TAG = "DocDetector"
+
+    // ====== КОНСТАНТЫ ======
     private const val PROCESSING_WIDTH = 640.0
     private const val PROCESSING_HEIGHT = 480.0
     private const val PROCESSING_AREA = PROCESSING_WIDTH * PROCESSING_HEIGHT
-    private var logCounter = 0
-    // ====== ГЛАВНЫЙ МЕТОД ======
-    fun findDocumentCorners(image: Mat): Array<Point> {
-        totalAttempts++
-        logCounter++
-        val shouldLog = logCounter %5 == 0
-        if (shouldLog) {
-            Log.d(TAG, "=== Попытка #$totalAttempts ===")
-        }
+    private const val SMOOTHING_DISTANCE = 50.0
+    private const val MAX_STUCK_ATTEMPTS = 5
+    private const val MIN_QUAD_AREA_RATIO = 0.02
+    private const val MAX_QUAD_AREA_RATIO = 0.90
+    private const val MIN_QUALITY_THRESHOLD = 0.3
+    private const val MAX_CANDIDATES = 50
+    private const val CONTOUR_PROCESSING_TIMEOUT = 3L
 
-        Log.d(TAG, "=== Попытка #$totalAttempts ===")
-        Log.d(TAG, "Входное изображение: ${image.cols()}x${image.rows()}, channels=${image.channels()}")
+    // ====== ПОТОКОБЕЗОПАСНЫЕ МЕТРИКИ ======
+    private val totalAttemptsAtomic = AtomicInteger(0)
+    private val successCountAtomic = AtomicInteger(0)
+    private val fallbackCountAtomic = AtomicInteger(0)
 
-        val result = findCornersInternal(image)
-        if (result != null && result.size == 4) {
-            successCount++
-            if (shouldLog) {
-                Log.d(TAG, "✅ УСПЕХ! Углы: ${result.joinToString { "(${it.x.toInt()}, ${it.y.toInt()})" }}")
+    val totalAttempts: Int get() = totalAttemptsAtomic.get()
+    val successCount: Int get() = successCountAtomic.get()
+    val fallbackCount: Int get() = fallbackCountAtomic.get()
+
+    // ====== ПОТОКОБЕЗОПАСНОЕ СОСТОЯНИЕ ======
+    private data class DetectorState(
+        val previousCorners: Array<Point>? = null,
+        val previousArea: Double = 0.0,
+        val stuckCounter: Int = 0
+    )
+
+    private val stateRef = AtomicReference(DetectorState())
+    private val stateLock = ReentrantReadWriteLock()
+
+    // ====== ИСПРАВЛЕННЫЙ MatPool ======
+    private class MatPool(private val capacity: Int = 4) {
+        private val pool = ConcurrentLinkedQueue<Mat>()
+        private val createdCount = AtomicInteger(0)
+        private val reusedCount = AtomicInteger(0)
+        private val lock = ReentrantReadWriteLock()
+
+        fun acquire(): Mat {
+            lock.write {
+                while (pool.isNotEmpty()) {
+                    val mat = pool.poll()
+                    if (mat.nativeObj != 0L && !mat.empty()) {
+                        reusedCount.incrementAndGet()
+                        return mat
+                    } else {
+                        try {
+                            mat.release()
+                        } catch (e: Exception) {
+                            // Игнорируем
+                        }
+                    }
+                }
+
+                createdCount.incrementAndGet()
+                return Mat()
             }
-            return result
         }
 
-        fallbackCount++
-        Log.d(TAG, "❌ НЕ НАЙДЕНО! Использую фолбэк")
-        Log.d(TAG, "Статистика: успех=$successCount, фолбэк=$fallbackCount, всего=$totalAttempts")
-        return getFallbackCorners(image)
+        fun release(mat: Mat) {
+            lock.write {
+                if (mat.nativeObj != 0L) {
+                    // ✅ Освобождаем нативные ресурсы
+                    mat.release()
+
+                    // ✅ Сохраняем пустой Mat в пул
+                    if (pool.size < capacity) {
+                        pool.offer(Mat())
+                    }
+                }
+            }
+        }
+
+        fun getStats(): String {
+            return "Created: ${createdCount.get()}, Reused: ${reusedCount.get()}, Pool size: ${pool.size}"
+        }
+
+        fun releaseAll() {
+            lock.write {
+                pool.forEach {
+                    try { it.release() } catch (e: Exception) { /* ignore */ }
+                }
+                pool.clear()
+                createdCount.set(0)
+                reusedCount.set(0)
+            }
+        }
     }
 
-    // ====== УЛУЧШЕННЫЙ ПОИСК УГЛОВ ======
+    private val smallMatPool = MatPool()
+    private val grayMatPool = MatPool()
+    private val normalizedMatPool = MatPool()
+    private val blurredMatPool = MatPool()
+
+    // ====== ОБЩИЙ ПУЛ ДЛЯ КОНТУРОВ ======
+    private val contourPool = ForkJoinPool(
+        min(4, Runtime.getRuntime().availableProcessors())
+    )
+
+    // ====== БЛОКИРОВКА ДЛЯ ИЗОБРАЖЕНИЙ ======
+    private val imageLocks = ConcurrentHashMap<Int, Any>()
+
+    private fun imageLock(image: Mat): Any {
+        val key = System.identityHashCode(image.nativeObj)
+        return imageLocks.computeIfAbsent(key) { Any() }
+    }
+
+    // ====== ГЛАВНЫЙ МЕТОД ======
+    fun findDocumentCorners(image: Mat): Array<Point>? {
+        totalAttemptsAtomic.incrementAndGet()
+
+        if (image.empty() || image.cols() == 0 || image.rows() == 0) {
+            Log.e(TAG, "Empty or invalid input image")
+            fallbackCountAtomic.incrementAndGet()
+            return getFallbackCorners(image)
+        }
+
+        return synchronized(imageLock(image)) {
+            try {
+                val result = findCornersInternal(image)
+
+                if (result != null && result.size == 4 && isValidQuad(result)) {
+                    successCountAtomic.incrementAndGet()
+                    updateSmoothingThreadSafe(result)
+                    return result
+                }
+
+                val currentState = stateRef.get()
+                if (currentState.previousCorners != null &&
+                    currentState.stuckCounter < MAX_STUCK_ATTEMPTS) {
+
+                    Log.d(TAG, "Using previous corners (stuck: ${currentState.stuckCounter})")
+                    stateRef.updateAndGet { it.copy(stuckCounter = it.stuckCounter + 1) }
+                    return currentState.previousCorners
+                }
+
+                fallbackCountAtomic.incrementAndGet()
+                stateRef.updateAndGet { it.copy(stuckCounter = 0) }
+                getFallbackCorners(image)
+            } catch (e: Exception) {
+                Log.e(TAG, "findDocumentCorners error: ${e.message}", e)
+                fallbackCountAtomic.incrementAndGet()
+                getFallbackCorners(image)
+            }
+        }
+    }
+
+    // ====== ВНУТРЕННИЙ ПОИСК ======
     private fun findCornersInternal(image: Mat): Array<Point>? {
-        val small = Mat()
-        val gray = Mat()
-        val blurred = Mat()
+        val small = smallMatPool.acquire()
+        val gray = grayMatPool.acquire()
+        val normalized = normalizedMatPool.acquire()
+        val blurred = blurredMatPool.acquire()
 
         return try {
-            Imgproc.resize(image, small, Size(640.0, 480.0), 0.0, 0.0, Imgproc.INTER_AREA)
+            Imgproc.resize(image, small, Size(PROCESSING_WIDTH, PROCESSING_HEIGHT),
+                0.0, 0.0, Imgproc.INTER_AREA)
             Imgproc.cvtColor(small, gray, Imgproc.COLOR_BGR2GRAY)
-            Imgproc.GaussianBlur(gray, blurred, Size(5.0, 5.0), 0.0)
 
-            val imageArea=PROCESSING_AREA
-            val minArea = imageArea * 0.02
-            val maxArea = imageArea * 0.90
+            Core.normalize(gray, normalized, 0.0, 255.0, Core.NORM_MINMAX)
 
-            Log.d(TAG, "Размер для обработки: ${small.cols()}x${small.rows()}, area=$imageArea")
-            Log.d(TAG, "minArea=$minArea, maxArea=$maxArea")
+            val clahe = Imgproc.createCLAHE(3.0, Size(8.0, 8.0))
+            clahe.apply(normalized, normalized)
 
-            // ====== МЕТОД 1: БИНАРИЗАЦИЯ OTSU ======
-            Log.d(TAG, "--- Метод 1: Otsu Binary ---")
-            var bestCorners = findByOtsuBinary(blurred,gray, minArea, maxArea)
-            if (bestCorners != null) {
-                Log.d(TAG, "Otsu Binary: НАЙДЕНО")
-            } else {
-                Log.d(TAG, "Otsu Binary: не найдено")
-            }
+            Imgproc.GaussianBlur(normalized, blurred, Size(5.0, 5.0), 0.0)
 
-            // ====== МЕТОД 2: CANNY ======
-            if (bestCorners == null) {
-                Log.d(TAG, "--- Метод 2: Canny ---")
-                bestCorners = findByCanny(blurred, minArea, maxArea)
-                if (bestCorners != null) {
-                    Log.d(TAG, "Canny: НАЙДЕНО")
-                } else {
-                    Log.d(TAG, "Canny: не найдено")
+            val minArea = PROCESSING_AREA * MIN_QUAD_AREA_RATIO
+            val maxArea = PROCESSING_AREA * MAX_QUAD_AREA_RATIO
+
+            val candidates = ConcurrentHashMap.newKeySet<CandidateQuad>()
+
+            // Используем общий пул
+            val futures = listOf(
+                contourPool.submit {
+                    findCandidatesByOtsu(gray, minArea, maxArea)?.let {
+                        candidates.addAll(it)
+                    }
+                },
+                contourPool.submit {
+                    findCandidatesByCanny(blurred, minArea, maxArea)?.let {
+                        candidates.addAll(it)
+                    }
+                },
+                contourPool.submit {
+                    findCandidatesByAdaptive(blurred, minArea, maxArea)?.let {
+                        candidates.addAll(it)
+                    }
+                }
+            )
+
+            futures.forEach { future ->
+                try {
+                    future.get(CONTOUR_PROCESSING_TIMEOUT, TimeUnit.SECONDS)
+                } catch (e: TimeoutException) {
+                    future.cancel(true)
+                    Log.w(TAG, "Method timeout, cancelling")
+                } catch (e: ExecutionException) {
+                    Log.e(TAG, "Execution error: ${e.cause?.message}")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Method error: ${e.message}")
                 }
             }
 
-            // ====== МЕТОД 3: АДАПТИВНЫЙ THRESHOLD ======
-            if (bestCorners == null) {
-                Log.d(TAG, "--- Метод 3: Adaptive Threshold ---")
-                bestCorners = findByAdaptiveThreshold(blurred, minArea, maxArea)
-                if (bestCorners != null) {
-                    Log.d(TAG, "Adaptive: НАЙДЕНО")
-                } else {
-                    Log.d(TAG, "Adaptive: не найдено")
-                }
-            }
+            val bestCandidate = selectBestCandidate(candidates.toList())
 
-            // ====== МЕТОД 4: ПРОСТОЙ THRESHOLD ======
-            if (bestCorners == null) {
-                Log.d(TAG, "--- Метод 4: Simple Threshold ---")
-                bestCorners = findBySimpleThreshold(blurred, minArea, maxArea)
-                if (bestCorners != null) {
-                    Log.d(TAG, "Simple Threshold: НАЙДЕНО")
-                } else {
-                    Log.d(TAG, "Simple Threshold: не найдено")
-                }
-            }
-
-            // ====== МЕТОД 5: ЛЮБОЙ КОНТУР ======
-            if (bestCorners == null) {
-                Log.d(TAG, "--- Метод 5: Any Contour ---")
-                bestCorners = findByAnyContour(blurred, minArea, maxArea)
-                if (bestCorners != null) {
-                    Log.d(TAG, "Any Contour: НАЙДЕНО")
-                } else {
-                    Log.d(TAG, "Any Contour: не найдено")
-                }
-            }
-
-            // ====== МАСШТАБИРУЕМ ОБРАТНО ======
-            if (bestCorners != null && bestCorners.size == 4) {
+            if (bestCandidate != null) {
                 val scaleX = image.cols().toDouble() / small.cols().toDouble()
                 val scaleY = image.rows().toDouble() / small.rows().toDouble()
 
-                Log.d(TAG, "Масштабирование: scaleX=$scaleX, scaleY=$scaleY")
-
                 val scaledCorners = Array(4) { i ->
                     Point(
-                        bestCorners[i].x * scaleX,
-                        bestCorners[i].y * scaleY
+                        bestCandidate.corners[i].x * scaleX,
+                        bestCandidate.corners[i].y * scaleY
                     )
                 }
 
-                Log.d(TAG, "До сглаживания: ${scaledCorners.joinToString { "(${it.x.toInt()}, ${it.y.toInt()})" }}")
-                bestCorners = smoothCorners(scaledCorners)
-                Log.d(TAG, "После сглаживания: ${bestCorners.joinToString { "(${it.x.toInt()}, ${it.y.toInt()})" }}")
+                smoothCornersThreadSafe(scaledCorners)
+            } else {
+                null
             }
-
-            bestCorners
-
         } catch (e: Exception) {
             Log.e(TAG, "findCornersInternal error: ${e.message}", e)
             null
         } finally {
-            small.release()
-            gray.release()
-            blurred.release()
+            smallMatPool.release(small)
+            grayMatPool.release(gray)
+            normalizedMatPool.release(normalized)
+            blurredMatPool.release(blurred)
         }
     }
 
-    // ====== МЕТОД 1: БИНАРИЗАЦИЯ OTSU ======
-    private fun findByOtsuBinary(
-        blurred: Mat,      // ← Добавлен параметр
+    // ====== КЛАСС КАНДИДАТА ======
+    private data class CandidateQuad(
+        val corners: Array<Point>,
+        val quality: Double,
+        val area: Double,
+        val method: String
+    )
+
+    // ====== ИСПРАВЛЕННЫЙ findCandidatesByOtsu ======
+    private fun findCandidatesByOtsu(
         gray: Mat,
         minArea: Double,
         maxArea: Double
-    ): Array<Point>? {
+    ): List<CandidateQuad>? {
+        val candidates = mutableListOf<CandidateQuad>()
+        val binary = Mat()
+        val binaryInv = Mat()
+
         return try {
-            val binary = Mat()
-            val otsuThreshold = Imgproc.threshold(gray, binary, 0.0, 255.0, Imgproc.THRESH_BINARY + Imgproc.THRESH_OTSU)
-            Log.d(TAG, "Otsu threshold: $otsuThreshold")
-
-            val inverted = Mat()
-            Core.bitwise_not(binary, inverted)
-
-            val imageArea=640.0*480.0
-
-            // Проверяем обычную
-            val contours1 = mutableListOf<MatOfPoint>()
-            Imgproc.findContours(binary, contours1, Mat(), Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
-            Log.d(TAG, "Обычная: контуров = ${contours1.size}")
-            val corners1 = findBestQuadFromContours(contours1, minArea, maxArea, "Otsu-обычная", )
-            // Проверяем инвертированную
-            val contours2 = mutableListOf<MatOfPoint>()
-            Imgproc.findContours(inverted, contours2, Mat(), Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
-            Log.d(TAG, "Инвертированная: контуров = ${contours2.size}")
-            val corners2 = findBestQuadFromContours(contours2, minArea, maxArea, "Otsu-инверт", )
-
-
-            binary.release()
-            inverted.release()
-
-            // Если оба null - возвращаем null
-            if (corners1 == null && corners2 == null) return null
-
-            // Если один null - возвращаем второй
-            if (corners1 == null) return corners2
-            if (corners2 == null) return corners1
-
-            // Если оба найдены - выбираем НЕ full screen
-            val isFull1 = isFullScreen(corners1)
-            val isFull2 = isFullScreen(corners2)
-
-            Log.d(TAG, "Оба варианта: full1=$isFull1, full2=$isFull2")
-
-            if (isFull1 && !isFull2) {
-                Log.d(TAG, "Выбираю не-full-screen вариант 2")
-                return corners2
-            }
-            if (isFull2 && !isFull1) {
-                Log.d(TAG, "Выбираю не-full-screen вариант 1")
-                return corners1
+            // Otsu Binary
+            val contours = mutableListOf<MatOfPoint>()
+            try {
+                Imgproc.threshold(gray, binary, 0.0, 255.0,
+                    Imgproc.THRESH_BINARY or Imgproc.THRESH_OTSU)
+                Imgproc.findContours(binary, contours, Mat(),
+                    Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+                candidates.addAll(processContours(contours, minArea, maxArea, "Otsu-Binary"))
+            } finally {
+                contours.forEach { it.release() }
+                contours.clear()
             }
 
-            // Если оба не full screen - выбираем с большей площадью
-            val area1 = contourArea(corners1)
-            val area2 = contourArea(corners2)
-            Log.d(TAG, "Площади: area1=$area1, area2=$area2")
+            // Otsu Binary Inv
+            val contoursInv = mutableListOf<MatOfPoint>()
+            try {
+                Imgproc.threshold(gray, binaryInv, 0.0, 255.0,
+                    Imgproc.THRESH_BINARY_INV or Imgproc.THRESH_OTSU)
+                Imgproc.findContours(binaryInv, contoursInv, Mat(),
+                    Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+                candidates.addAll(processContours(contoursInv, minArea, maxArea, "Otsu-Inv"))
+            } finally {
+                contoursInv.forEach { it.release() }
+                contoursInv.clear()
+            }
 
-            if (area1 > area2) corners1 else corners2
-
+            if (candidates.isEmpty()) null else candidates
         } catch (e: Exception) {
-            Log.e(TAG, "Otsu Binary error: ${e.message}", e)
+            Log.e(TAG, "Otsu method error: ${e.message}")
             null
+        } finally {
+            binary.release()
+            binaryInv.release()
         }
     }
 
-    /// ====== МЕТОД 2: CANNY ======
-    private fun findByCanny(
+    // ====== ИСПРАВЛЕННЫЙ findCandidatesByCanny ======
+    private fun findCandidatesByCanny(
         blurred: Mat,
         minArea: Double,
         maxArea: Double
-    ): Array<Point>? {
+    ): List<CandidateQuad>? {
+        val candidates = mutableListOf<CandidateQuad>()
+
         return try {
-            // Пробуем несколько порогов
             val thresholds = listOf(
-                30.0 to 100.0,
-                50.0 to 150.0,
-                20.0 to 80.0
+                Pair(30.0, 90.0),
+                Pair(50.0, 150.0),
+                Pair(70.0, 200.0)
             )
 
             for ((low, high) in thresholds) {
-                Log.d(TAG, "Canny пороги: $low-$high")
                 val edges = Mat()
-                Imgproc.Canny(blurred, edges, low, high)
+                val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(3.0, 3.0))
 
-                val contours = mutableListOf<MatOfPoint>()
-                Imgproc.findContours(edges, contours, Mat(), Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
-                Log.d(TAG, "Canny ($low-$high): контуров = ${contours.size}")
-
-                val corners = findBestQuadFromContours(contours, minArea, maxArea, "Canny-$low-$high")
-
-                if (corners != null) return corners
-            }
-
-            null
-        } catch (e: Exception) {
-            Log.e(TAG, "Canny error: ${e.message}", e)
-            null
-        }
-    }
-
-    // ====== МЕТОД 3: АДАПТИВНЫЙ THRESHOLD ======
-    private fun findByAdaptiveThreshold(
-        blurred: Mat,
-        minArea: Double,
-        maxArea: Double
-    ): Array<Point>? {
-        return try {
-            // Пробуем разные параметры
-            val blockSizes = listOf(11, 15, 21)
-            val constants = listOf(2.0, 5.0, 10.0)
-
-            for (blockSize in blockSizes) {
-                for (c in constants) {
-                    Log.d(TAG, "Adaptive: blockSize=$blockSize, C=$c")
-                    val thresh = Mat()
-                    Imgproc.adaptiveThreshold(blurred, thresh, 255.0,
-                        Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, Imgproc.THRESH_BINARY, blockSize, c)
+                try {
+                    Imgproc.Canny(blurred, edges, low, high)
+                    Imgproc.dilate(edges, edges, kernel)
 
                     val contours = mutableListOf<MatOfPoint>()
-                    Imgproc.findContours(thresh, contours, Mat(), Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
-                    Log.d(TAG, "Adaptive: контуров = ${contours.size}")
-
-                    val corners = findBestQuadFromContours(contours, minArea, maxArea, "Adaptive-$blockSize-$c", )
-
-                    if (corners != null) return corners
+                    try {
+                        Imgproc.findContours(edges, contours, Mat(),
+                            Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+                        candidates.addAll(processContours(contours, minArea, maxArea, "Canny-$low-$high"))
+                    } finally {
+                        contours.forEach { it.release() }
+                        contours.clear()
+                    }
+                } finally {
+                    edges.release()
+                    kernel.release()
                 }
             }
 
-            null
+            if (candidates.isEmpty()) null else candidates
         } catch (e: Exception) {
-            Log.e(TAG, "Adaptive error: ${e.message}", e)
+            Log.e(TAG, "Canny method error: ${e.message}")
             null
         }
     }
 
-    // ====== МЕТОД 4: ПРОСТОЙ THRESHOLD ======
-    private fun findBySimpleThreshold(
+    // ====== ИСПРАВЛЕННЫЙ findCandidatesByAdaptive ======
+    private fun findCandidatesByAdaptive(
         blurred: Mat,
         minArea: Double,
         maxArea: Double
-    ): Array<Point>? {
-        return try {
-            val thresholds = listOf(80.0, 100.0, 127.0, 150.0, 180.0)
+    ): List<CandidateQuad>? {
+        val candidates = mutableListOf<CandidateQuad>()
 
-            for (thresh in thresholds) {
-                Log.d(TAG, "Simple Threshold: $thresh")
+        return try {
+            val blockSizes = listOf(11, 15, 21, 31)
+
+            for (blockSize in blockSizes) {
                 val binary = Mat()
-                Imgproc.threshold(blurred, binary, thresh, 255.0, Imgproc.THRESH_BINARY)
 
-                val contours = mutableListOf<MatOfPoint>()
-                Imgproc.findContours(binary, contours, Mat(), Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
-                Log.d(TAG, "Threshold $thresh: контуров = ${contours.size}")
+                try {
+                    Imgproc.adaptiveThreshold(
+                        blurred, binary, 255.0,
+                        Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C,
+                        Imgproc.THRESH_BINARY, blockSize, 10.0
+                    )
 
-                val corners = findBestQuadFromContours(contours, minArea, maxArea, "Threshold-$thresh")
-
-                if (corners != null) return corners
+                    val contours = mutableListOf<MatOfPoint>()
+                    try {
+                        Imgproc.findContours(binary, contours, Mat(),
+                            Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+                        candidates.addAll(processContours(contours, minArea, maxArea, "Adaptive-$blockSize"))
+                    } finally {
+                        contours.forEach { it.release() }
+                        contours.clear()
+                    }
+                } finally {
+                    binary.release()
+                }
             }
 
-            null
+            if (candidates.isEmpty()) null else candidates
         } catch (e: Exception) {
-            Log.e(TAG, "Simple Threshold error: ${e.message}", e)
+            Log.e(TAG, "Adaptive method error: ${e.message}")
             null
         }
     }
 
-    // ====== МЕТОД 5: ЛЮБОЙ КОНТУР ======
-    private fun findByAnyContour(
-        blurred: Mat,
-        minArea: Double,
-        maxArea: Double
-    ): Array<Point>? {
-        return try {
-            Log.d(TAG, "Ищу ЛЮБОЙ контур...")
-            val contours = mutableListOf<MatOfPoint>()
-            Imgproc.findContours(blurred, contours, Mat(), Imgproc.RETR_LIST, Imgproc.CHAIN_APPROX_SIMPLE)
-            Log.d(TAG, "Всего контуров: ${contours.size}")
-
-            var maxAreaFound = 0.0
-            var bestContour: MatOfPoint? = null
-
-            for (contour in contours) {
-                val area = Geometry.contourArea(contour)
-                Log.d(TAG, "Контур: area=$area, точек=${contour.rows()}")
-
-                if (area < minArea || area > maxArea) {
-                    Log.d(TAG, "  → отброшен (вне диапазона)")
-                    continue
-                }
-
-                if (area > maxAreaFound) {
-                    maxAreaFound = area
-                    bestContour = contour
-                }
-            }
-
-            if (bestContour == null) {
-                Log.d(TAG, "Подходящий контур не найден")
-                return null
-            }
-
-            Log.d(TAG, "Лучший контур: area=$maxArea, точек=${bestContour.rows()}")
-
-            // Пробуем аппроксимацию
-            val peri = Geometry.arcLength(MatOfPoint2f(*bestContour.toArray()), true)
-            Log.d(TAG, "Периметр: $peri")
-
-            val epsilons = listOf(0.01, 0.02, 0.03, 0.05, 0.1, 0.15)
-
-            for (eps in epsilons) {
-                val approx = MatOfPoint2f()
-                Geometry.approxPolyDP(MatOfPoint2f(*bestContour.toArray()), approx, eps * peri, true)
-                val points = approx.toArray()
-                Log.d(TAG, "epsilon=$eps → точек после аппроксимации: ${points.size}")
-
-                if (points.size == 4) {
-                    Log.d(TAG, "Найден четырёхугольник с epsilon=$eps")
-                    return orderCorners(points)
-                }
-            }
-
-            // Fallback: boundingRect
-            Log.d(TAG, "Использую boundingRect")
-            val rect = Geometry.boundingRect(bestContour)
-            Log.d(TAG, "BoundingRect: x=${rect.x}, y=${rect.y}, w=${rect.width}, h=${rect.height}")
-
-            orderCorners(arrayOf(
-                Point(rect.x.toDouble(), rect.y.toDouble()),
-                Point((rect.x + rect.width).toDouble(), rect.y.toDouble()),
-                Point((rect.x + rect.width).toDouble(), (rect.y + rect.height).toDouble()),
-                Point(rect.x.toDouble(), (rect.y + rect.height).toDouble())
-            ))
-        } catch (e: Exception) {
-            Log.e(TAG, "Any Contour error: ${e.message}", e)
-            null
-        }
-    }
-
-    // ====== ВСПОМОГАТЕЛЬНЫЙ: ПОИСК ЧЕТЫРЁХУГОЛЬНИКА ======
-    // ====== ВСПОМОГАТЕЛЬНЫЙ: ПОИСК ЧЕТЫРЁХУГОЛЬНИКА ======
-    private fun findBestQuadFromContours(
+    // ====== ИСПРАВЛЕННЫЙ processContours ======
+    private fun processContours(
         contours: List<MatOfPoint>,
         minArea: Double,
         maxArea: Double,
-        source: String
-    ): Array<Point>? {
-        var bestArea = 0.0
-        var bestCorners: Array<Point>? = null
+        method: String
+    ): List<CandidateQuad> {
+        val candidates = ConcurrentLinkedQueue<CandidateQuad>()
 
-        val absoluteMaxArea = PROCESSING_AREA * 0.95
+        val futures = contours.mapNotNull { contour ->
+            // ✅ Дополнительная проверка перед клонированием
+            if (contour.empty() || contour.total() < 3) {
+                null
+            } else {
+                val contourCopy = try {
+                    MatOfPoint(*contour.toArray())
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to copy contour for method $method", e)
+                    null
+                }
 
-        for ((index, contour) in contours.withIndex()) {
-            val area = Geometry.contourArea(contour)
-
-            if (area > minArea) {
-                Log.d(TAG, "$source: контур #$index: area=$area, точек=${contour.rows()}")
-            }
-
-            if (area > absoluteMaxArea) {
-                Log.d(TAG, "  → отброшен (слишком большой)")
-                continue
-            }
-
-            if (area < minArea || area > maxArea) {
-                continue
-            }
-
-            val peri = Geometry.arcLength(MatOfPoint2f(*contour.toArray()), true)
-            val epsilons = listOf(0.01, 0.02, 0.03, 0.05, 0.1)
-
-            for (eps in epsilons) {
-                val approx = MatOfPoint2f()
-                Geometry.approxPolyDP(MatOfPoint2f(*contour.toArray()), approx, eps * peri, true)
-                val points = approx.toArray()
-
-                if (points.size == 4 && area > bestArea) {
-                    val ordered = orderCorners(points)
-
-                    // Добавьте проверку выпуклости
-                    if (isConvexQuad(ordered) && isValidQuad(ordered) && !isFullScreen(ordered)) {
-                        Log.d(TAG, "  ✅ Валидный: area=$area")
-                        bestArea = area
-                        bestCorners = ordered
-                        break
-                    } else {
-                        if (!isConvexQuad(ordered)) {
-                            Log.d(TAG, "  ❌ Не выпуклый")
-                        }
-                        if (!isValidQuad(ordered)) {
-                            Log.d(TAG, "  ❌ Невалидный")
-                        }
-                        if (isFullScreen(ordered)) {
-                            Log.d(TAG, "  ❌ Весь экран")
+                if (contourCopy == null) {
+                    null
+                } else {
+                    contourPool.submit<CandidateQuad?> {
+                        try {
+                            processSingleContour(contourCopy, minArea, maxArea, method)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Contour processing error: ${e.message}")
+                            null
+                        } finally {
+                            contourCopy.release()
                         }
                     }
                 }
             }
         }
 
-        return bestCorners
-    }
-
-    private fun isClockwise(points: Array<Point>): Boolean {
-        if (points.size != 4) return false
-
-        var sum = 0.0
-        for (i in 0..3) {
-            val p1 = points[i]
-            val p2 = points[(i + 1) % 4]
-            sum += (p2.x - p1.x) * (p2.y + p1.y)
-        }
-
-        // Положительная сумма = по часовой стрелке
-        return sum > 0
-    }
-
-    // ====== ПРОВЕРКА: НЕ ВЕСЬ ЛИ ЭТО ЭКРАН ======
-    private fun isFullScreen(points: Array<Point>): Boolean {
-        if (points.size != 4) return false
-
-        val margin = 20.0
-
-        var edgePoints = 0
-        for (p in points) {
-            val nearLeft = p.x < margin
-            val nearRight = p.x > PROCESSING_WIDTH - margin
-            val nearTop = p.y < margin
-            val nearBottom = p.y > PROCESSING_HEIGHT - margin
-
-            if (nearLeft || nearRight || nearTop || nearBottom) {
-                edgePoints++
+        futures.forEach { future ->
+            try {
+                val result = future.get(CONTOUR_PROCESSING_TIMEOUT, TimeUnit.SECONDS)
+                if (result != null && candidates.size < MAX_CANDIDATES) {
+                    candidates.add(result)
+                }
+            } catch (e: TimeoutException) {
+                future.cancel(true)
+                Log.w(TAG, "Contour processing timeout")
+            } catch (e: ExecutionException) {
+                Log.e(TAG, "Execution error: ${e.cause?.message}")
+            } catch (e: Exception) {
+                Log.e(TAG, "Future error: ${e.message}")
             }
         }
 
-        // Если 3+ точек на краях - это весь экран
-        if (edgePoints >= 3) {
-            Log.d(TAG, "  ❌ Весь экран: $edgePoints точек на краях")
-            return true
-        }
-
-        // Проверяем площадь (более 85% = весь экран)
-        val area = contourArea(points)
-        val ratio = area / PROCESSING_AREA
-
-        if (ratio > 0.85) {
-            Log.d(TAG, "  ❌ Весь экран: площадь ${(ratio * 100).toInt()}%")
-            return true
-        }
-
-        // Проверяем, что документ не прижат к краям
-        val minX = points.minOf { it.x }
-        val maxX = points.maxOf { it.x }
-        val minY = points.minOf { it.y }
-        val maxY = points.maxOf { it.y }
-
-        val width = maxX - minX
-        val height = maxY - minY
-
-        if (width < PROCESSING_WIDTH * 0.3 || height < PROCESSING_HEIGHT * 0.3) {
-            Log.d(TAG, "  ❌ Слишком маленький: ${width}x${height}")
-            return true
-        }
-
-        return false
+        return candidates.toList()
     }
 
-    // ====== ВСПОМОГАТЕЛЬНЫЙ: ПЛОЩАДЬ ЧЕТЫРЁХУГОЛЬНИКА ======
-    private fun contourArea(points: Array<Point>): Double {
-        if (points.size != 4) return 0.0
-        val contour = MatOfPoint2f(*points)
-        val area = Geometry.contourArea(contour)
-        contour.release()
-        return area
-    }
-
-
-    // ====== ПРОСТОЕ СГЛАЖИВАНИЕ ======
-    private fun smoothCorners(corners: Array<Point>): Array<Point> {
-        if (previousCorners == null || previousCorners!!.size != 4) {
-            previousCorners = corners
-            return corners
+    private fun processSingleContour(
+        contour: MatOfPoint,
+        minArea: Double,
+        maxArea: Double,
+        method: String
+    ): CandidateQuad? {
+        // ✅ Добавлена проверка на валидность контура
+        if (contour.empty() || contour.rows() < 3) {
+            return null
         }
 
-        val maxDiff = (0..3).maxOfOrNull { i ->
-            val dx = abs(corners[i].x - previousCorners!![i].x)
-            val dy = abs(corners[i].y - previousCorners!![i].y)
-            max(dx, dy)
-        } ?: 0.0
-
-        // Плавное сглаживание ВСЕГДА (без сброса!)
-        val smoothFactor = when {
-            maxDiff < 5 -> 0.8    // Почти не двигается - сильное сглаживание
-            maxDiff < 15 -> 0.6   // Небольшое движение
-            maxDiff < 40 -> 0.4   // Среднее движение
-            maxDiff < 100 -> 0.2  // Быстрое движение
-            else -> 0.1           // Очень быстрое - почти без сглаживания
+        val area = try {
+            Geometry.contourArea(contour)
+        } catch (e: Exception) {
+            Log.e(TAG, "contourArea failed for $method: ${e.message}")
+            return null
         }
 
-        val smoothed = Array(4) { i ->
-            Point(
-                previousCorners!![i].x * smoothFactor + corners[i].x * (1 - smoothFactor),
-                previousCorners!![i].y * smoothFactor + corners[i].y * (1 - smoothFactor)
-            )
-        }
+        if (area < minArea || area > maxArea) return null
 
-        previousCorners = smoothed
-        return smoothed
-    }
+        var contour2f: MatOfPoint2f? = null
 
-    private fun isValidQuad(points: Array<Point>): Boolean {
-        if (points.size != 4) return false
+        return try {
+            contour2f = MatOfPoint2f(*contour.toArray())
+            val peri = Geometry.arcLength(contour2f, true)
 
-        // Проверяем, что точки не совпадают
-        for (i in 0..2) {
-            for (j in i+1..3) {
-                val dist = distance(points[i], points[j])
-                if (dist < 15) {
-                    Log.d(TAG, "  ❌ Точки $i и $j слишком близко: $dist")
-                    return false
+            val epsilons = listOf(0.02, 0.03, 0.05)
+
+            for (eps in epsilons) {
+                var approx: MatOfPoint2f? = null
+
+                try {
+                    approx = MatOfPoint2f()
+                    Geometry.approxPolyDP(contour2f, approx, eps * peri, true)
+
+                    if (approx.total() == 4L) {
+                        var approxMatOfPoint: MatOfPoint? = null
+
+                        try {
+                            approxMatOfPoint = MatOfPoint(*approx.toArray())
+
+                            if (Geometry.isContourConvex(approxMatOfPoint)) {
+                                val points = approx.toArray()
+                                val corners = orderCorners(arrayOf(
+                                    Point(points[0].x, points[0].y),
+                                    Point(points[1].x, points[1].y),
+                                    Point(points[2].x, points[2].y),
+                                    Point(points[3].x, points[3].y)
+                                ))
+
+                                if (isValidQuad(corners)) {
+                                    val quality = calculateQuality(corners, area)
+                                    if (quality > MIN_QUALITY_THRESHOLD) {
+                                        return CandidateQuad(corners, quality, area, method)
+                                    }
+                                }
+                            }
+                        } finally {
+                            approxMatOfPoint?.release()
+                        }
+                    }
+                } finally {
+                    approx?.release()
                 }
             }
+
+            null
+        } finally {
+            contour2f?.release()
         }
+    }
 
-        // Проверяем стороны
-        val w1 = distance(points[0], points[1])  // Top-Left → Top-Right
-        val w2 = distance(points[3], points[2])  // Bottom-Left → Bottom-Right
-        val h1 = distance(points[0], points[3])  // Top-Left → Bottom-Left
-        val h2 = distance(points[1], points[2])  // Top-Right → Bottom-Right
+    // ====== ВЫБОР ЛУЧШЕГО КАНДИДАТА ======
+    private fun selectBestCandidate(candidates: List<CandidateQuad>): CandidateQuad? {
+        if (candidates.isEmpty()) return null
+        return candidates.maxByOrNull { it.quality }
+    }
 
-        if (w1 < 20 || w2 < 20 || h1 < 20 || h2 < 20) {
-            Log.d(TAG, "  ❌ Стороны слишком короткие")
-            return false
-        }
+    // ====== ГЕОМЕТРИЧЕСКИЕ МЕТРИКИ ======
+    private fun calculateQuality(corners: Array<Point>, area: Double): Double {
+        if (!isConvex(corners)) return 0.0
+        if (hasSelfIntersection(corners)) return 0.0
 
-        // Проверяем, что противоположные стороны примерно равны
-        val wRatio = max(w1, w2) / min(w1, w2)
-        val hRatio = max(h1, h2) / min(h1, h2)
+        var quality = 0.0
 
-        if (wRatio > 2.5 || hRatio > 2.5) {
-            Log.d(TAG, "  ❌ Противоположные стороны не равны: wRatio=$wRatio, hRatio=$hRatio")
-            return false
-        }
-
-        // Проверяем углы (должны быть 60-120 градусов)
-        val angle1 = getAngle(points[0], points[1], points[3])  // TL
-        val angle2 = getAngle(points[1], points[2], points[0])  // TR
-        val angle3 = getAngle(points[2], points[3], points[1])  // BR
-        val angle4 = getAngle(points[3], points[0], points[2])  // BL
-
-        for (angle in listOf(angle1, angle2, angle3, angle4)) {
-            if (angle < 50 || angle > 130) {
-                Log.d(TAG, "  ❌ Угол вне диапазона: $angle")
-                return false
+        val angles = calculateAngles(corners)
+        val angleScore = angles.map { angle ->
+            when {
+                angle in 70.0..110.0 -> 1.0
+                angle in 50.0..130.0 -> 0.7
+                angle in 30.0..150.0 -> 0.4
+                else -> 0.1
             }
+        }.average()
+        quality += angleScore * 0.5
+
+        val parallelismScore = calculateParallelism(corners)
+        quality += parallelismScore * 0.3
+
+        val sizeScore = when {
+            area > PROCESSING_AREA * 0.20 -> 1.0
+            area > PROCESSING_AREA * 0.10 -> 0.8
+            area > PROCESSING_AREA * 0.05 -> 0.5
+            else -> 0.2
         }
+        quality += sizeScore * 0.2
 
-        // Соотношение сторон
-        val avgW = (w1 + w2) / 2
-        val avgH = (h1 + h2) / 2
-        val aspect = max(avgW, avgH) / min(avgW, avgH)
-
-        if (aspect > 6) {
-            Log.d(TAG, "  ❌ Слишком вытянутый: aspect=$aspect")
-            return false
-        }
-
-        return true
+        return quality
     }
 
-    private fun getAngle(p1: Point, p2: Point, p3: Point): Double {
-        val v1x = p2.x - p1.x
-        val v1y = p2.y - p1.y
-        val v2x = p3.x - p1.x
-        val v2y = p3.y - p1.y
+    private fun calculateParallelism(corners: Array<Point>): Double {
+        val v1 = doubleArrayOf(corners[1].x - corners[0].x, corners[1].y - corners[0].y)
+        val v2 = doubleArrayOf(corners[2].x - corners[1].x, corners[2].y - corners[1].y)
+        val v3 = doubleArrayOf(corners[3].x - corners[2].x, corners[3].y - corners[2].y)
+        val v4 = doubleArrayOf(corners[0].x - corners[3].x, corners[0].y - corners[3].y)
 
-        val dot = v1x * v2x + v1y * v2y
-        val mag1 = sqrt(v1x * v1x + v1y * v1y)
-        val mag2 = sqrt(v2x * v2x + v2y * v2y)
+        val len1 = sqrt(v1[0] * v1[0] + v1[1] * v1[1])
+        val len2 = sqrt(v2[0] * v2[0] + v2[1] * v2[1])
+        val len3 = sqrt(v3[0] * v3[0] + v3[1] * v3[1])
+        val len4 = sqrt(v4[0] * v4[0] + v4[1] * v4[1])
 
-        if (mag1 == 0.0 || mag2 == 0.0) return 0.0
+        if (len1 == 0.0 || len2 == 0.0 || len3 == 0.0 || len4 == 0.0) return 0.0
 
-        val cosAngle = (dot / (mag1 * mag2)).coerceIn(-1.0, 1.0)
-        return Math.toDegrees(acos(cosAngle))
+        val n1 = doubleArrayOf(v1[0] / len1, v1[1] / len1)
+        val n2 = doubleArrayOf(v2[0] / len2, v2[1] / len2)
+        val n3 = doubleArrayOf(v3[0] / len3, v3[1] / len3)
+        val n4 = doubleArrayOf(v4[0] / len4, v4[1] / len4)
+
+        val dot1 = n1[0] * n3[0] + n1[1] * n3[1]
+        val dot2 = n2[0] * n4[0] + n2[1] * n4[1]
+
+        val parallel1 = (dot1 + 1.0) / 2.0
+        val parallel2 = (dot2 + 1.0) / 2.0
+
+        return (parallel1 + parallel2) / 2.0
     }
 
-    // ====== СОРТИРОВКА УГЛОВ ======
-    private fun orderCorners(points: Array<Point>): Array<Point> {
-        if (points.size != 4) return points
-
-        Log.d(TAG, "Сортировка вход: ${points.joinToString { "(${it.x.toInt()}, ${it.y.toInt()})" }}")
-
-        // Находим центр масс
-        val centerX = points.map { it.x }.average()
-        val centerY = points.map { it.y }.average()
-
-        // Сортируем по углу относительно центра (по часовой стрелке)
-        val sorted = points.sortedBy { point ->
-            atan2(point.y - centerY, point.x - centerX)
-        }
-
-        // После сортировки по углу:
-        // sorted[0] - самый "верхний" (наименьший угол)
-        // sorted[1] - правый
-        // sorted[2] - нижний
-        // sorted[3] - левый
-
-        // Но нам нужен порядок: TL, TR, BR, BL
-        // Находим TL как точку с минимальной суммой x+y
-        val tl = sorted.minByOrNull { it.x + it.y } ?: sorted[0]
-        val br = sorted.maxByOrNull { it.x + it.y } ?: sorted[2]
-
-        // Оставшиеся две точки
-        val remaining = sorted.filter { it != tl && it != br }
-
-        if (remaining.size != 2) {
-            // Fallback
-            val sortedByY = points.sortedBy { it.y }
-            val top = sortedByY.take(2).sortedBy { it.x }
-            val bottom = sortedByY.takeLast(2).sortedBy { it.x }
-            return arrayOf(top[0], top[1], bottom[1], bottom[0])
-        }
-
-        // TR = больший x, BL = меньший x
-        val tr = remaining.maxByOrNull { it.x } ?: remaining[0]
-        val bl = remaining.minByOrNull { it.x } ?: remaining[1]
-
-        return arrayOf(tl, tr, br, bl)
-
-        val result = arrayOf(tl, tr, br, bl)
-        Log.d(TAG, "Сортировка выход: ${result.joinToString { "(${it.x.toInt()}, ${it.y.toInt()})" }}")
-
-        return result
-    }
-    private fun isConvexQuad(points: Array<Point>): Boolean {
+    private fun isConvex(points: Array<Point>): Boolean {
         if (points.size != 4) return false
 
         var sign = 0
-        for (i in 0..3) {
-            val p1 = points[i]
-            val p2 = points[(i + 1) % 4]
-            val p3 = points[(i + 2) % 4]
-
-            val cross = (p2.x - p1.x) * (p3.y - p2.y) - (p2.y - p1.y) * (p3.x - p2.x)
+        for (i in 0 until 4) {
+            val dx1 = points[(i + 2) % 4].x - points[(i + 1) % 4].x
+            val dy1 = points[(i + 2) % 4].y - points[(i + 1) % 4].y
+            val dx2 = points[i].x - points[(i + 1) % 4].x
+            val dy2 = points[i].y - points[(i + 1) % 4].y
+            val cross = dx1 * dy2 - dy1 * dx2
 
             if (cross != 0.0) {
                 val currentSign = if (cross > 0) 1 else -1
-                if (sign == 0) {
-                    sign = currentSign
-                } else if (sign != currentSign) {
-                    return false  // Не выпуклый
-                }
+                if (sign == 0) sign = currentSign
+                else if (sign != currentSign) return false
             }
         }
-
         return true
     }
-    // ====== ПРОВЕРКА РЕЗКОСТИ ======
-    fun isSharpEnough(image: Mat): Boolean {
-        if (image.empty()) return true
 
-        val gray = Mat()
-        val laplacian = Mat()
-        val squared = Mat()
+    private fun hasSelfIntersection(points: Array<Point>): Boolean {
+        fun segmentsIntersect(p1: Point, p2: Point, p3: Point, p4: Point): Boolean {
+            val d1 = direction(p3, p4, p1)
+            val d2 = direction(p3, p4, p2)
+            val d3 = direction(p1, p2, p3)
+            val d4 = direction(p1, p2, p4)
 
-        return try {
-            Imgproc.cvtColor(image, gray, Imgproc.COLOR_BGR2GRAY)
-            Imgproc.Laplacian(gray, laplacian, CvType.CV_32F)
-            Core.multiply(laplacian, laplacian, squared)
-            val mean = Core.mean(squared).`val`[0]
-
-            val sharpness = mean
-
-            if (sharpness > maxSharpness) {
-                maxSharpness = maxSharpness * 0.9 + sharpness * 0.1
-            }
-            if (maxSharpness == 0.0) maxSharpness = sharpness
-
-            val threshold = maxSharpness * 0.5
-            val isSharp = sharpness >= threshold
-
-            val sharpnessNorm = (sharpness * 1000).toInt()
-            val maxNorm = (maxSharpness * 1000).toInt()
-            val thresholdNorm = (threshold * 1000).toInt()
-            Log.d("DocDetector", "Резкость: $sharpnessNorm (макс: $maxNorm, порог: $thresholdNorm) → ${if (isSharp) "✅" else "❌"}")
-
-            isSharp
-        } catch (e: Exception) {
-            Log.e("DocDetector", "Sharpness error: ${e.message}")
-            true
-        } finally {
-            gray.release()
-            laplacian.release()
-            squared.release()
+            return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+                    ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))
         }
+
+        return segmentsIntersect(points[0], points[1], points[2], points[3]) ||
+                segmentsIntersect(points[1], points[2], points[3], points[0])
     }
 
-    // ====== ЗАПАСНОЙ ======
-    private fun getFallbackCorners(image: Mat): Array<Point> {
-        val m = image.cols() * 0.1f
-        val mY = image.rows() * 0.1f
-        val fallback = arrayOf(
-            Point(m.toDouble(), mY.toDouble()),
-            Point((image.cols() - m).toDouble(), mY.toDouble()),
-            Point((image.cols() - m).toDouble(), (image.rows() - mY).toDouble()),
-            Point(m.toDouble(), (image.rows() - mY).toDouble())
-        )
-        Log.d(TAG, "Фолбэк углы: ${fallback.joinToString { "(${it.x.toInt()}, ${it.y.toInt()})" }}")
-        return fallback
+    private fun direction(p1: Point, p2: Point, p3: Point): Double {
+        return (p3.x - p1.x) * (p2.y - p1.y) - (p2.x - p1.x) * (p3.y - p1.y)
     }
 
-    // ====== WARP ======
-    fun warpDocument(src: Mat, corners: Array<Point>): Mat {
-        val ordered = orderCorners(corners)
+    private fun calculateAngles(corners: Array<Point>): DoubleArray {
+        val angles = DoubleArray(4)
 
-        val w1 = distance(ordered[0], ordered[1])
-        val w2 = distance(ordered[3], ordered[2])
-        val h1 = distance(ordered[0], ordered[3])
-        val h2 = distance(ordered[1], ordered[2])
+        for (i in 0 until 4) {
+            val prev = corners[(i + 3) % 4]
+            val curr = corners[i]
+            val next = corners[(i + 1) % 4]
 
-        var outW = max(w1, w2).toInt()
-        var outH = max(h1, h2).toInt()
-        outW = outW.coerceIn(100, 4000)
-        outH = outH.coerceIn(100, 5000)
+            val v1 = doubleArrayOf(prev.x - curr.x, prev.y - curr.y)
+            val v2 = doubleArrayOf(next.x - curr.x, next.y - curr.y)
 
-        val srcPts = MatOfPoint2f(
-            Point(ordered[0].x, ordered[0].y),
-            Point(ordered[1].x, ordered[1].y),
-            Point(ordered[2].x, ordered[2].y),
-            Point(ordered[3].x, ordered[3].y)
-        )
-        val dstPts = MatOfPoint2f(
-            Point(0.0, 0.0),
-            Point(outW - 1.0, 0.0),
-            Point(outW - 1.0, outH - 1.0),
-            Point(0.0, outH - 1.0)
-        )
+            val dot = v1[0] * v2[0] + v1[1] * v2[1]
+            val mag1 = sqrt(v1[0] * v1[0] + v1[1] * v1[1])
+            val mag2 = sqrt(v2[0] * v2[0] + v2[1] * v2[1])
 
-        val matrix = Geometry.getPerspectiveTransform(srcPts, dstPts)
-        val warped = Mat()
-        Imgproc.warpPerspective(src, warped, matrix, Size(outW.toDouble(), outH.toDouble()),
-            Imgproc.INTER_LINEAR, Core.BORDER_CONSTANT, Scalar(255.0, 255.0, 255.0))
-
-        return warped
-    }
-
-    /**
-     * Авто-обрезка полей: убирает белые области по краям.
-     */
-    fun autoCropMargins(input: Mat): Mat {
-        if (input.empty()) return input.clone()
-
-        val gray = Mat()
-        val binary = Mat()
-        val points = MatOfPoint()
-        var result: Mat?
-
-        try {
-            if (input.channels() == 3) {
-                Imgproc.cvtColor(input, gray, Imgproc.COLOR_BGR2GRAY)
+            if (mag1 == 0.0 || mag2 == 0.0) {
+                angles[i] = 0.0
             } else {
-                input.copyTo(gray)
+                val cosAngle = dot / (mag1 * mag2)
+                angles[i] = Math.toDegrees(acos(cosAngle.coerceIn(-1.0, 1.0)))
+            }
+        }
+
+        return angles
+    }
+
+    private fun isValidQuad(corners: Array<Point>): Boolean {
+        if (corners.size != 4) return false
+
+        for (i in 0 until 4) {
+            for (j in i + 1 until 4) {
+                if (distance(corners[i], corners[j]) < 10.0) return false
+            }
+        }
+
+        if (!isConvex(corners)) return false
+
+        val angles = calculateAngles(corners)
+        return angles.all { it in 20.0..160.0 }
+    }
+
+    // ====== ИСПРАВЛЕННЫЙ orderCorners (стабильная сортировка) ======
+    private fun orderCorners(points: Array<Point>): Array<Point> {
+        if (points.size != 4) return points
+
+        // Сортировка по Y (верхние первыми)
+        val sortedByY = points.sortedBy { it.y }
+
+        // Верхние две точки сортируем по X (левый -> правый)
+        val topPoints = sortedByY.take(2).sortedBy { it.x }
+
+        // Нижние две точки сортируем по X (правый -> левый)
+        val bottomPoints = sortedByY.takeLast(2).sortedByDescending { it.x }
+
+        return arrayOf(
+            topPoints[0],     // Верхний-левый
+            topPoints[1],     // Верхний-правый
+            bottomPoints[0],  // Нижний-правый
+            bottomPoints[1]   // Нижний-левый
+        )
+    }
+
+    // ====== ПОТОКОБЕЗОПАСНОЕ СГЛАЖИВАНИЕ ======
+    private fun smoothCornersThreadSafe(corners: Array<Point>): Array<Point> {
+        return stateLock.write {
+            val currentState = stateRef.get()
+            val prev = currentState.previousCorners
+
+            if (prev == null) {
+                stateRef.set(currentState.copy(
+                    previousCorners = corners,
+                    previousArea = calculateArea(corners)
+                ))
+                return@write corners
             }
 
-            Imgproc.threshold(gray, binary, 250.0, 255.0, Imgproc.THRESH_BINARY)
-            Core.bitwise_not(binary, binary)
-
-            Core.findNonZero(binary, points)
-
-            if (points.empty()) {
-                return input.clone()
+            var maxDistance = 0.0
+            for (i in 0 until 4) {
+                maxDistance = max(maxDistance, distance(prev[i], corners[i]))
             }
 
-            val rect = Geometry.boundingRect(points)
-
-            val margin = 5
-            val x = (rect.x - margin).coerceAtLeast(0)
-            val y = (rect.y - margin).coerceAtLeast(0)
-            val w = (rect.width + margin * 2).coerceAtMost(input.cols() - x)
-            val h = (rect.height + margin * 2).coerceAtMost(input.rows() - y)
-
-            Log.d("DocDetector", "AutoCrop: исходный=${input.cols()}x${input.rows()}, " +
-                    "после=${w}x${h}, " +
-                    "обрезано=${input.cols() - w}px по ширине, ${input.rows() - h}px по высоте")
-
-            result = input.submat(y, y + h, x, x + w).clone()
-
-        } catch (e: Exception) {
-            Log.e("DocDetector", "autoCropMargins ошибка: ${e.message}")
-            return input.clone()
-        } finally {
-            gray.release()
-            binary.release()
-            points.release()
-        }
-
-        return result ?: input.clone()
-    }
-
-    fun enhanceScan(input: Mat, filter: String = "bw"): Mat {
-        return when (filter) {
-            "bw" -> enhanceBw(input)
-            "color" -> enhanceColor(input)
-            "sharp" -> enhanceSharp(input)
-            "shadow" -> removeShadows(input)
-            else -> enhanceBw(input)
-        }
-    }
-
-    /**
-     * Sauvola Binarization — чистая бинаризация без выгрызания текста.
-     */
-    private fun sauvolaBinarization(input: Mat, windowSize: Int = 25, k: Double = 0.2): Mat {
-        if (input.empty() || input.channels() != 1) {
-            Log.e("DocDetector", "sauvolaBinarization: неверные входные данные")
-            return input.clone()
-        }
-
-        val result = Mat()
-        val grayFloat = Mat()
-        val mean = Mat()
-        val squared = Mat()
-        val squaredMean = Mat()
-        val variance = Mat()
-        val stdDev = Mat()
-        val threshold = Mat()
-        val temp = Mat()
-
-        try {
-            input.convertTo(grayFloat, CvType.CV_32F, 1.0 / 255.0)
-            Imgproc.GaussianBlur(grayFloat, mean, Size(windowSize.toDouble(), windowSize.toDouble()), 0.0)
-
-            Core.multiply(grayFloat, grayFloat, squared)
-            Imgproc.GaussianBlur(squared, squaredMean, Size(windowSize.toDouble(), windowSize.toDouble()), 0.0)
-
-            Core.subtract(squaredMean, mean, squaredMean)
-            Core.absdiff(squaredMean, Scalar(0.0), variance)
-
-            Core.sqrt(variance, stdDev)
-
-            val R = 0.5
-            Core.divide(stdDev, Scalar(R), temp)
-            Core.add(temp, Scalar(-1.0), temp)
-            Core.multiply(temp, Scalar(k), temp)
-            Core.add(temp, Scalar(1.0), temp)
-            Core.multiply(mean, temp, threshold)
-
-            Core.compare(grayFloat, threshold, result, Core.CMP_GT)
-            result.convertTo(result, CvType.CV_8U, 255.0)
-
-            Log.d("DocDetector", "Sauvola: OK, размер=${result.width()}x${result.height()}")
-
-        } catch (e: Exception) {
-            Log.e("DocDetector", "Sauvola ошибка: ${e.message}")
-            Imgproc.adaptiveThreshold(input, result, 255.0,
-                Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, Imgproc.THRESH_BINARY, 11, 2.0)
-        } finally {
-            grayFloat.release()
-            mean.release()
-            squared.release()
-            squaredMean.release()
-            variance.release()
-            stdDev.release()
-            threshold.release()
-            temp.release()
-        }
-
-        return result
-    }
-
-    private fun enhanceBw(input: Mat): Mat {
-        return sauvolaBinarization(input)
-    }
-
-    private fun enhanceColor(input: Mat): Mat {
-        val lab = Mat()
-        Imgproc.cvtColor(input, lab, Imgproc.COLOR_BGR2Lab)
-        val channels = mutableListOf<Mat>()
-        Core.split(lab, channels)
-
-        val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
-        val claheL = Mat()
-        clahe.apply(channels[0], claheL)
-        claheL.copyTo(channels[0])
-
-        val merged = Mat()
-        Core.merge(channels, merged)
-        val result = Mat()
-        Imgproc.cvtColor(merged, result, Imgproc.COLOR_Lab2BGR)
-        return result
-    }
-
-    private fun enhanceSharp(input: Mat): Mat {
-        return try {
-            val input16 = Mat()
-            input.convertTo(input16, CvType.CV_16S, 1.0, 0.0)
-            val blurred = Mat()
-            Imgproc.GaussianBlur(input16, blurred, Size(0.0, 0.0), 1.5)
-            val result16 = Mat()
-            Core.addWeighted(input16, 1.2, blurred, -0.2, 0.0, result16)
-            val result = Mat()
-            result16.convertTo(result, CvType.CV_8U)
-            result
-        } catch (e: Exception) { input.clone() }
-    }
-
-    // ====== REMOVE SHADOWS ======
-    fun removeShadows(input: Mat): Mat {
-        if (input.empty()) {
-            Log.e("DocDetector", "removeShadows: пустое изображение")
-            return Mat()
-        }
-
-        val result = Mat()
-        val gray = Mat()
-        val grayFloat = Mat()
-        val bgFloat = Mat()
-        val diffFloat = Mat()
-
-        try {
-            if (input.channels() == 3) {
-                Imgproc.cvtColor(input, gray, Imgproc.COLOR_BGR2GRAY)
+            val currentArea = calculateArea(corners)
+            val areaRatio = if (currentState.previousArea > 0 && currentArea > 0) {
+                max(currentArea / currentState.previousArea,
+                    currentState.previousArea / currentArea)
             } else {
-                input.copyTo(gray)
+                1.0
             }
 
-            if (gray.empty()) {
-                Log.e("DocDetector", "removeShadows: gray пустой")
-                return input.clone()
+            if (maxDistance > SMOOTHING_DISTANCE || areaRatio > 1.5) {
+                stateRef.set(currentState.copy(
+                    previousCorners = corners,
+                    previousArea = currentArea,
+                    stuckCounter = 0
+                ))
+                return@write corners
             }
 
-            val maxDimension = max(gray.width(), gray.height())
-            var kernelSize = when {
-                maxDimension > 3000 -> 91
-                maxDimension > 2000 -> 71
-                maxDimension > 1000 -> 51
-                else -> 31
-            }
-            kernelSize = min(kernelSize, 151)
-
-            gray.convertTo(grayFloat, CvType.CV_32F, 1.0 / 255.0)
-            Imgproc.GaussianBlur(grayFloat, bgFloat, Size(kernelSize.toDouble(), kernelSize.toDouble()), 0.0)
-            Core.subtract(grayFloat, bgFloat, diffFloat)
-
-            val minMaxResult = Core.minMaxLoc(diffFloat)
-            val minVal = minMaxResult.minVal
-            val maxVal = minMaxResult.maxVal
-
-            if (maxVal - minVal < 0.05) {
-                Log.d("DocDetector", "removeShadows: контраст слишком низкий, возвращаю оригинал")
-                return input.clone()
+            val smoothed = Array(4) { i ->
+                Point(
+                    prev[i].x * 0.7 + corners[i].x * 0.3,
+                    prev[i].y * 0.7 + corners[i].y * 0.3
+                )
             }
 
-            Core.normalize(diffFloat, result, 0.0, 255.0, Core.NORM_MINMAX, CvType.CV_8U)
+            stateRef.set(currentState.copy(
+                previousCorners = smoothed,
+                previousArea = calculateArea(smoothed),
+                stuckCounter = 0
+            ))
 
-            Log.d("DocDetector", "removeShadows: kernel=$kernelSize, размер=${result.width()}x${result.height()}")
-
-        } catch (e: Exception) {
-            Log.e("DocDetector", "removeShadows ошибка: ${e.message}")
-            return input.clone()
-        } finally {
-            gray.release()
-            grayFloat.release()
-            bgFloat.release()
-            diffFloat.release()
+            smoothed
         }
-
-        return result
     }
 
-    // ====== ВСПОМОГАТЕЛЬНЫЕ ======
-    // ====== РАССТОЯНИЕ ======
+    private fun updateSmoothingThreadSafe(corners: Array<Point>) {
+        stateLock.write {
+            stateRef.updateAndGet { state ->
+                state.copy(
+                    previousCorners = corners,
+                    previousArea = calculateArea(corners),
+                    stuckCounter = 0
+                )
+            }
+        }
+    }
+
+    private fun calculateArea(corners: Array<Point>): Double {
+        if (corners.size != 4) return 0.0
+
+        var area = 0.0
+        for (i in 0 until 4) {
+            val j = (i + 1) % 4
+            area += corners[i].x * corners[j].y
+            area -= corners[j].x * corners[i].y
+        }
+        return abs(area) / 2.0
+    }
+
     private fun distance(p1: Point, p2: Point): Double {
         val dx = p1.x - p2.x
         val dy = p1.y - p2.y
         return sqrt(dx * dx + dy * dy)
+    }
+
+    private fun getFallbackCorners(image: Mat): Array<Point>? {
+        if (image.empty() || image.cols() == 0 || image.rows() == 0) return null
+
+        return arrayOf(
+            Point(0.0, 0.0),
+            Point(image.cols().toDouble(), 0.0),
+            Point(image.cols().toDouble(), image.rows().toDouble()),
+            Point(0.0, image.rows().toDouble())
+        )
+    }
+
+    // ====== ПУБЛИЧНЫЕ УТИЛИТЫ ======
+
+    fun isSharpEnough(image: Mat, threshold: Double = 30.0): Boolean {
+        if (image.empty()) return false
+
+        val gray = Mat()
+        val laplacian = Mat()
+        val mean = MatOfDouble()
+        val stddev = MatOfDouble()
+
+        return try {
+            Imgproc.cvtColor(image, gray, Imgproc.COLOR_BGR2GRAY)
+            Imgproc.Laplacian(gray, laplacian, CvType.CV_64F)
+            Core.meanStdDev(laplacian, mean, stddev)
+
+            val variance = stddev.get(0, 0)[0] * stddev.get(0, 0)[0]
+            variance > threshold
+        } catch (e: Exception) {
+            Log.e(TAG, "isSharpEnough error: ${e.message}")
+            false
+        } finally {
+            gray.release()
+            laplacian.release()
+            mean.release()
+            stddev.release()
+        }
+    }
+
+    // ====== ИСПРАВЛЕННЫЙ warpDocument ======
+    fun warpDocument(image: Mat, corners: Array<Point>): Mat? {
+        if (image.empty() || corners.size != 4) return null
+
+        for (corner in corners) {
+            if (corner.x < 0 || corner.x > image.cols() ||
+                corner.y < 0 || corner.y > image.rows()) {
+                Log.w(TAG, "Corners outside image boundaries")
+                return null
+            }
+        }
+
+        if (!isValidQuad(corners)) return null
+
+        return try {
+            val ordered = orderCorners(corners)
+
+            // ✅ Используем среднее для сохранения пропорций
+            val width = ((distance(ordered[0], ordered[1]) +
+                    distance(ordered[2], ordered[3])) / 2.0).roundToInt()
+
+            val height = ((distance(ordered[0], ordered[3]) +
+                    distance(ordered[1], ordered[2])) / 2.0).roundToInt()
+
+            if (width < 100 || height < 100 || width > 5000 || height > 5000) {
+                return null
+            }
+
+            // ✅ Правильный порядок для перспективы
+            val srcPts = MatOfPoint2f(
+                ordered[0], ordered[1], ordered[2], ordered[3]  // Внимание!
+            )
+            val dstPts = MatOfPoint2f(
+                Point(0.0, 0.0),
+                Point(width.toDouble(), 0.0),
+                Point(width.toDouble(), height.toDouble()), // Правый-нижний
+                Point(0.0, height.toDouble())   // Левый-нижний
+            )
+
+            val matrix = Geometry.getPerspectiveTransform(srcPts, dstPts)
+            val warped = Mat()
+            Imgproc.warpPerspective(image, warped, matrix, Size(width.toDouble(), height.toDouble()))
+
+            srcPts.release()
+            dstPts.release()
+            matrix.release()
+
+            warped
+        } catch (e: Exception) {
+            Log.e(TAG, "warpDocument error: ${e.message}")
+            null
+        }
+    }
+
+    // ====== ИСПРАВЛЕННЫЙ autoCropMargins ======
+    fun autoCropMargins(image: Mat): Mat? {
+        if (image.empty()) return null
+
+        val gray = Mat()
+        val binary = Mat()
+        val points = MatOfPoint()
+        var kernel: Mat? = null
+
+        return try {
+            Imgproc.cvtColor(image, gray, Imgproc.COLOR_BGR2GRAY)
+
+            val mean = Core.mean(gray).`val`[0]
+
+            if (mean > 200) {
+                Imgproc.threshold(gray, binary, 0.0, 255.0,
+                    Imgproc.THRESH_BINARY + Imgproc.THRESH_OTSU)
+            } else {
+                Imgproc.adaptiveThreshold(gray, binary, 255.0,
+                    Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C,
+                    Imgproc.THRESH_BINARY, 15, 2.0)
+            }
+
+            kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(3.0, 3.0))
+            Imgproc.morphologyEx(binary, binary, Imgproc.MORPH_CLOSE, kernel)
+
+            Core.findNonZero(binary, points)
+
+            if (points.empty()) {
+                return image.clone()
+            }
+
+            val rect = Geometry.boundingRect(points)
+            val padding = 5
+
+            val x = (rect.x - padding).coerceAtLeast(0)
+            val y = (rect.y - padding).coerceAtLeast(0)
+            val width = (rect.width + padding * 2).coerceAtMost(image.cols() - x)
+            val height = (rect.height + padding * 2).coerceAtMost(image.rows() - y)
+
+            if (width <= 0 || height <= 0) return image.clone()
+
+            Mat(image, Rect(x, y, width, height)).clone()
+        } catch (e: Exception) {
+            Log.e(TAG, "autoCropMargins error: ${e.message}")
+            image.clone()
+        } finally {
+            gray.release()
+            binary.release()
+            points.release()
+            kernel?.release()
+        }
+    }
+
+    // ====== ИСПРАВЛЕННЫЙ removeShadows ======
+    fun removeShadows(image: Mat): Mat {
+        if (image.empty()) return image.clone()
+
+        val lab = Mat()
+        val channels = mutableListOf<Mat>()
+
+        return try {
+            Imgproc.cvtColor(image, lab, Imgproc.COLOR_BGR2Lab)
+            Core.split(lab, channels)
+
+            val lChannel = channels[0]
+
+            val maxDimension = max(image.cols(), image.rows())
+            val kernelSize = when {
+                maxDimension > 3000 -> 101
+                maxDimension > 2000 -> 71
+                maxDimension > 1000 -> 51
+                maxDimension > 500 -> 31
+                else -> 15
+            }
+
+            val background = Mat()
+            Imgproc.GaussianBlur(lChannel, background,
+                Size(kernelSize.toDouble(), kernelSize.toDouble()), 0.0)
+
+            val diff = Mat()
+            Core.subtract(lChannel, background, diff)
+            Core.normalize(diff, diff, 0.0, 255.0, Core.NORM_MINMAX)
+
+            // Заменяем L канал
+            lChannel.release()
+            channels[0] = diff
+
+            val result = Mat()
+            Core.merge(channels, result)
+            Imgproc.cvtColor(result, result, Imgproc.COLOR_Lab2BGR)
+
+            background.release()
+            channels[1].release()
+            channels[2].release()
+
+            result
+        } catch (e: Exception) {
+            Log.e(TAG, "removeShadows error: ${e.message}")
+            image.clone()
+        } finally {
+            lab.release()
+        }
+    }
+
+    /**
+     * Улучшение скана в зависимости от выбранного фильтра.
+     */
+    fun enhanceScan(image: Mat, filter: String = "bw"): Mat {
+        if (image.empty()) return image.clone()
+
+        return when (filter) {
+            "bw" -> {
+                // Чёрно-белый режим: бинаризация Отсу
+                val gray = Mat()
+                Imgproc.cvtColor(image, gray, Imgproc.COLOR_BGR2GRAY)
+                val binary = Mat()
+                Imgproc.threshold(gray, binary, 0.0, 255.0, Imgproc.THRESH_BINARY + Imgproc.THRESH_OTSU)
+                gray.release()
+                binary
+            }
+            "color" -> {
+                // Лёгкое улучшение контраста (CLAHE)
+                val lab = Mat()
+                Imgproc.cvtColor(image, lab, Imgproc.COLOR_BGR2Lab)
+                val channels = mutableListOf<Mat>()
+                Core.split(lab, channels)
+                val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
+                clahe.apply(channels[0], channels[0])
+                val merged = Mat()
+                Core.merge(channels, merged)
+                val result = Mat()
+                Imgproc.cvtColor(merged, result, Imgproc.COLOR_Lab2BGR)
+                lab.release()
+                channels.forEach { it.release() }
+                merged.release()
+                result
+            }
+            "sharp" -> {
+                // Повышение резкости
+                val blurred = Mat()
+                Imgproc.GaussianBlur(image, blurred, Size(0.0, 0.0), 3.0)
+                val result = Mat()
+                Core.addWeighted(image, 1.5, blurred, -0.5, 0.0, result)
+                blurred.release()
+                result
+            }
+            "shadow" -> removeShadows(image)  // уже есть
+            else -> {
+                // По умолчанию – ч/б
+                val gray = Mat()
+                Imgproc.cvtColor(image, gray, Imgproc.COLOR_BGR2GRAY)
+                val binary = Mat()
+                Imgproc.threshold(gray, binary, 0.0, 255.0, Imgproc.THRESH_BINARY + Imgproc.THRESH_OTSU)
+                gray.release()
+                binary
+            }
+        }
+    }
+
+    // ====== ОСВОБОЖДЕНИЕ РЕСУРСОВ ======
+    fun release() {
+        smallMatPool.releaseAll()
+        grayMatPool.releaseAll()
+        normalizedMatPool.releaseAll()
+        blurredMatPool.releaseAll()
+
+        stateLock.write {
+            stateRef.set(DetectorState())
+        }
+
+        imageLocks.clear()
+
+        Log.d(TAG, "Resources released. Pool stats: ${smallMatPool.getStats()}")
     }
 }

@@ -1,30 +1,29 @@
 package com.dragonsima.scandoc
 
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.util.Log
+import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.FileProvider
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
-import com.google.android.material.button.MaterialButton
+import com.dragonsima.scandoc.databinding.ActivityMainBinding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.opencv.android.OpenCVLoader
 import java.io.File
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var viewModel: MainViewModel
-    private lateinit var previewImage: android.widget.ImageView
-    private lateinit var statusText: android.widget.TextView
-    private lateinit var captureButton: MaterialButton
-    private lateinit var placeholderLayout: android.widget.LinearLayout
-    private lateinit var drawerLayout: androidx.drawerlayout.widget.DrawerLayout
-    private lateinit var navigationView: com.google.android.material.navigation.NavigationView
+    private lateinit var binding: ActivityMainBinding
+    private val previewBitmap = AtomicReference<Bitmap?>(null)
+    private var opencvLoaded = false
 
     private val cameraLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -34,14 +33,19 @@ class MainActivity : AppCompatActivity() {
             val savedPdfName = result.data?.getStringExtra("savedPdfName")
 
             if (savedPdfPath != null) {
-                Toast.makeText(this, "✅ Документ сохранён: $savedPdfName", Toast.LENGTH_LONG).show()
-                // Обновляем превью последнего документа
+                Toast.makeText(
+                    this,
+                    "✅ Документ сохранён: ${savedPdfName ?: "файл"}",
+                    Toast.LENGTH_LONG
+                ).show()
                 loadLastDocumentPreview()
             }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
         val prefs = getSharedPreferences("app_prefs", MODE_PRIVATE)
         if (!prefs.getBoolean("onboarding_completed", false)) {
             startActivity(Intent(this, OnboardingActivity::class.java))
@@ -49,60 +53,59 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
+        binding = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(binding.root)
 
         // Инициализация OpenCV
-        if (!OpenCVLoader.initLocal()) {
-            Toast.makeText(this, "OpenCV не загружен", Toast.LENGTH_SHORT).show()
-            Log.e("Main", "OpenCV failed to load")
+        opencvLoaded = OpenCVLoader.initLocal()
+        if (!opencvLoaded) {
+            Log.e(TAG, "OpenCV failed to load")
+            Toast.makeText(this, "Ошибка загрузки OpenCV. Функция сканирования недоступна.", Toast.LENGTH_LONG).show()
+            binding.captureButton.isEnabled = false
         } else {
-            Log.d("Main", "OpenCV loaded OK")
+            Log.d(TAG, "OpenCV loaded successfully")
+            binding.captureButton.isEnabled = true
         }
 
-        // Инициализация
+        // Инициализация файловой системы
         FileManager.init(this)
         FileManager.cleanCache(this)
-        viewModel = ViewModelProvider(this)[MainViewModel::class.java]
 
-        // Привязка UI
-        initViews()
         setupListeners()
-
-        // Загружаем превью последнего документа
         loadLastDocumentPreview()
     }
 
-    private fun initViews() {
-        previewImage = findViewById(R.id.previewImage)
-        statusText = findViewById(R.id.statusText)
-        captureButton = findViewById(R.id.captureButton)
-        placeholderLayout = findViewById(R.id.placeholderLayout)
-        drawerLayout = findViewById(R.id.drawerLayout)
-        navigationView = findViewById(R.id.navigationView)
+    override fun onResume() {
+        super.onResume()
+        // Если OpenCV загружен, показываем превью, иначе не показываем
+        if (opencvLoaded) {
+            loadLastDocumentPreview()
+        }
     }
 
     private fun setupListeners() {
-        // Захват фото
-        captureButton.setOnClickListener {
-            cameraLauncher.launch(Intent(this, CameraActivity::class.java))
+        binding.captureButton.setOnClickListener {
+            if (opencvLoaded) {
+                cameraLauncher.launch(Intent(this, CameraActivity::class.java))
+            } else {
+                Toast.makeText(this, "OpenCV недоступен", Toast.LENGTH_SHORT).show()
+            }
         }
 
-        val menuButton = findViewById<android.widget.TextView>(R.id.menuButton)
-        menuButton.setOnClickListener {
-            drawerLayout.open()
+        binding.menuButton.setOnClickListener {
+            binding.drawerLayout.open()
         }
 
-        navigationView.setNavigationItemSelectedListener { item ->
+        binding.navigationView.setNavigationItemSelectedListener { item ->
             when (item.itemId) {
                 R.id.menu_documents -> {
                     startActivity(Intent(this, DocumentsActivity::class.java))
-                    drawerLayout.close()
+                    binding.drawerLayout.close()
                     true
                 }
                 R.id.menu_settings -> {
                     startActivity(Intent(this, SettingsActivity::class.java))
-                    drawerLayout.close()
+                    binding.drawerLayout.close()
                     true
                 }
                 else -> false
@@ -112,39 +115,57 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadLastDocumentPreview() {
         lifecycleScope.launch {
-            withContext(Dispatchers.IO) {
-                val documentsDir = File(filesDir, "Documents")
-                if (documentsDir.exists()) {
-                    val pdfFiles = documentsDir.listFiles { file ->
-                        file.extension == "pdf"
-                    }?.sortedByDescending { it.lastModified() }
-
-                    if (pdfFiles != null && pdfFiles.isNotEmpty()) {
-                        val lastPdf = pdfFiles.first()
-                        val thumbnailFile = File(
-                            documentsDir.parentFile,
-                            "Thumbnails/${lastPdf.nameWithoutExtension}_thumb.jpg"
-                        )
-
-                        if (thumbnailFile.exists()) {
-                            runOnUiThread {
-                                val bitmap = android.graphics.BitmapFactory.decodeFile(thumbnailFile.absolutePath)
-                                if (bitmap != null) {
-                                    previewImage.setImageBitmap(bitmap)
-                                    statusText.text = "Последний документ: ${lastPdf.nameWithoutExtension}"
-                                    placeholderLayout.visibility = android.view.View.GONE
-                                    previewImage.visibility = android.view.View.VISIBLE
-                                }
-                            }
-                        }
-                    }
-                }
+            val bitmap = loadThumbnailFromDisk()
+            if (bitmap != null) {
+                setPreviewBitmap(bitmap)
+                binding.previewImage.setImageBitmap(bitmap)
+                binding.statusText.text = "Последний документ"
+                showPreview(true)
+            } else {
+                showPreview(false)
+                binding.statusText.text = "Готов к сканированию"
             }
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        loadLastDocumentPreview()
+    private suspend fun loadThumbnailFromDisk(): Bitmap? = withContext(Dispatchers.IO) {
+        try {
+            val documentsDir = File(filesDir, "Documents")
+            val thumbnailsDir = File(filesDir, "Thumbnails")
+            if (!documentsDir.exists() || !thumbnailsDir.exists()) {
+                return@withContext null
+            }
+
+            val lastPdf = documentsDir.listFiles { file ->
+                file.extension == "pdf"
+            }?.maxByOrNull { it.lastModified() } ?: return@withContext null
+
+            val thumbnailFile = File(thumbnailsDir, "${lastPdf.nameWithoutExtension}_thumb.jpg")
+            if (thumbnailFile.exists()) {
+                BitmapFactory.decodeFile(thumbnailFile.absolutePath)
+            } else null
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading thumbnail", e)
+            null
+        }
+    }
+
+    private fun setPreviewBitmap(bitmap: Bitmap?) {
+        previewBitmap.getAndSet(null)?.recycle()
+        previewBitmap.set(bitmap)
+    }
+
+    private fun showPreview(show: Boolean) {
+        binding.previewImage.visibility = if (show) View.VISIBLE else View.GONE
+        binding.placeholderLayout.visibility = if (show) View.GONE else View.VISIBLE
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        previewBitmap.getAndSet(null)?.recycle()
+    }
+
+    companion object {
+        private const val TAG = "MainActivity"
     }
 }
