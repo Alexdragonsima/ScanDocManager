@@ -16,4 +16,7 @@
     <color name="crop_color">#F59E0B</color>
     <color name="save_color">#10B981</color>
     <color name="overlay_background">#F8FFFFFF</color>
+    <color name="black">#000000</color>
+    <color name="grey_900">#1A1A1A</color>
+    <color name="grey_500">#9E9E9E</color>
 </resources>

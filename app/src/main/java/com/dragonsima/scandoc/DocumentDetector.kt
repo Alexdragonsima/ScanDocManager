@@ -2,6 +2,7 @@ package com.dragonsima.scandoc
 
 import org.opencv.core.*
 import org.opencv.imgproc.Imgproc
+import org.opencv.imgproc.CLAHE
 import android.util.Log
 import org.opencv.geometry.Geometry
 import kotlin.math.*
@@ -56,18 +57,17 @@ object DocumentDetector {
             lock.write {
                 while (pool.isNotEmpty()) {
                     val mat = pool.poll()
-                    if (mat.nativeObj != 0L && !mat.empty()) {
+                    if (mat.nativeObj != 0L) {
                         reusedCount.incrementAndGet()
                         return mat
                     } else {
                         try {
                             mat.release()
                         } catch (e: Exception) {
-                            // Игнорируем
+                            // ignore
                         }
                     }
                 }
-
                 createdCount.incrementAndGet()
                 return Mat()
             }
@@ -76,26 +76,22 @@ object DocumentDetector {
         fun release(mat: Mat) {
             lock.write {
                 if (mat.nativeObj != 0L) {
-                    // ✅ Освобождаем нативные ресурсы
-                    mat.release()
-
-                    // ✅ Сохраняем пустой Mat в пул
+                    // Очищаем содержимое, но не освобождаем нативную память
+                    mat.setTo(Scalar(0.0))
                     if (pool.size < capacity) {
-                        pool.offer(Mat())
+                        pool.offer(mat)
+                    } else {
+                        mat.release()
                     }
                 }
             }
         }
 
-        fun getStats(): String {
-            return "Created: ${createdCount.get()}, Reused: ${reusedCount.get()}, Pool size: ${pool.size}"
-        }
+        fun getStats(): String = "Created: ${createdCount.get()}, Reused: ${reusedCount.get()}, Pool size: ${pool.size}"
 
         fun releaseAll() {
             lock.write {
-                pool.forEach {
-                    try { it.release() } catch (e: Exception) { /* ignore */ }
-                }
+                pool.forEach { it.release() }
                 pool.clear()
                 createdCount.set(0)
                 reusedCount.set(0)
@@ -918,6 +914,9 @@ object DocumentDetector {
 
         val lab = Mat()
         val channels = mutableListOf<Mat>()
+        var background: Mat? = null
+        var diff: Mat? = null
+        var clahe: CLAHE? = null
 
         return try {
             Imgproc.cvtColor(image, lab, Imgproc.COLOR_BGR2Lab)
@@ -925,24 +924,19 @@ object DocumentDetector {
 
             val lChannel = channels[0]
 
-            val maxDimension = max(image.cols(), image.rows())
-            val kernelSize = when {
-                maxDimension > 3000 -> 101
-                maxDimension > 2000 -> 71
-                maxDimension > 1000 -> 51
-                maxDimension > 500 -> 31
-                else -> 15
-            }
+            background = Mat()
+            Imgproc.GaussianBlur(lChannel, background, Size(31.0, 31.0), 0.0)
 
-            val background = Mat()
-            Imgproc.GaussianBlur(lChannel, background,
-                Size(kernelSize.toDouble(), kernelSize.toDouble()), 0.0)
-
-            val diff = Mat()
+            diff = Mat()
             Core.subtract(lChannel, background, diff)
-            Core.normalize(diff, diff, 0.0, 255.0, Core.NORM_MINMAX)
 
-            // Заменяем L канал
+            // Сдвиг вместо NORM_MINMAX, чтобы избежать инверсии
+            Core.add(diff, Scalar(128.0), diff)
+
+            clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
+            clahe.apply(diff, diff)
+
+            // Заменяем L-канал
             lChannel.release()
             channels[0] = diff
 
@@ -950,15 +944,20 @@ object DocumentDetector {
             Core.merge(channels, result)
             Imgproc.cvtColor(result, result, Imgproc.COLOR_Lab2BGR)
 
-            background.release()
-            channels[1].release()
-            channels[2].release()
-
             result
         } catch (e: Exception) {
             Log.e(TAG, "removeShadows error: ${e.message}")
             image.clone()
         } finally {
+            background?.release()
+            diff?.release()
+            clahe?.collectGarbage()  // или clahe?.clear()
+
+            // Освобождаем все каналы, кроме channels[0], который уже освобождён через diff
+            for (i in 1 until channels.size) {
+                channels[i].release()
+            }
+
             lab.release()
         }
     }
@@ -966,56 +965,91 @@ object DocumentDetector {
     /**
      * Улучшение скана в зависимости от выбранного фильтра.
      */
-    fun enhanceScan(image: Mat, filter: String = "bw"): Mat {
-        if (image.empty()) return image.clone()
+    // ====== УЛУЧШЕНИЕ ИЗОБРАЖЕНИЯ ======
 
-        return when (filter) {
-            "bw" -> {
-                // Чёрно-белый режим: бинаризация Отсу
-                val gray = Mat()
-                Imgproc.cvtColor(image, gray, Imgproc.COLOR_BGR2GRAY)
-                val binary = Mat()
-                Imgproc.threshold(gray, binary, 0.0, 255.0, Imgproc.THRESH_BINARY + Imgproc.THRESH_OTSU)
-                gray.release()
-                binary
-            }
-            "color" -> {
-                // Лёгкое улучшение контраста (CLAHE)
-                val lab = Mat()
-                Imgproc.cvtColor(image, lab, Imgproc.COLOR_BGR2Lab)
-                val channels = mutableListOf<Mat>()
-                Core.split(lab, channels)
-                val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
-                clahe.apply(channels[0], channels[0])
-                val merged = Mat()
-                Core.merge(channels, merged)
-                val result = Mat()
-                Imgproc.cvtColor(merged, result, Imgproc.COLOR_Lab2BGR)
-                lab.release()
-                channels.forEach { it.release() }
-                merged.release()
-                result
-            }
-            "sharp" -> {
-                // Повышение резкости
-                val blurred = Mat()
-                Imgproc.GaussianBlur(image, blurred, Size(0.0, 0.0), 3.0)
-                val result = Mat()
-                Core.addWeighted(image, 1.5, blurred, -0.5, 0.0, result)
-                blurred.release()
-                result
-            }
-            "shadow" -> removeShadows(image)  // уже есть
-            else -> {
-                // По умолчанию – ч/б
-                val gray = Mat()
-                Imgproc.cvtColor(image, gray, Imgproc.COLOR_BGR2GRAY)
-                val binary = Mat()
-                Imgproc.threshold(gray, binary, 0.0, 255.0, Imgproc.THRESH_BINARY + Imgproc.THRESH_OTSU)
-                gray.release()
-                binary
-            }
+    fun enhanceScan(input: Mat, filter: String = "bw"): Mat {
+        val result = when (filter) {
+            "bw" -> enhanceBw(input)       // возвращает grayscale
+            "color" -> enhanceColor(input) // возвращает BGR
+            "sharp" -> enhanceSharp(input) // возвращает BGR
+            "shadow" -> enhanceBw(input)   // базовая ЧБ, дальше removeShadows отдельно
+            else -> input.clone()
         }
+
+        // Гарантируем 3 канала на выходе
+        if (result.channels() == 1) {
+            val bgr = Mat()
+            Imgproc.cvtColor(result, bgr, Imgproc.COLOR_GRAY2BGR)
+            result.release()
+            return bgr
+        }
+        return result
+    }
+
+    private fun enhanceBw(input: Mat): Mat {
+        if (input.empty()) return input.clone()
+
+        val gray = Mat()
+        if (input.channels() == 3) {
+            Imgproc.cvtColor(input, gray, Imgproc.COLOR_BGR2GRAY)
+        } else {
+            input.copyTo(gray)
+        }
+
+        // Адаптивная бинаризация Sauvola или adaptiveThreshold
+        val result = Mat()
+        Imgproc.adaptiveThreshold(
+            gray,
+            result,
+            255.0,
+            Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C,
+            Imgproc.THRESH_BINARY,
+            15,
+            10.0
+        )
+        gray.release()
+        return result
+    }
+
+    private fun enhanceColor(input: Mat): Mat {
+        if (input.empty()) return input.clone()
+
+        val lab = Mat()
+        Imgproc.cvtColor(input, lab, Imgproc.COLOR_BGR2Lab)
+        val channels = mutableListOf<Mat>()
+        Core.split(lab, channels)
+
+        val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
+        val claheL = Mat()
+        clahe.apply(channels[0], claheL)
+        claheL.copyTo(channels[0])
+
+        val merged = Mat()
+        Core.merge(channels, merged)
+        val result = Mat()
+        Imgproc.cvtColor(merged, result, Imgproc.COLOR_Lab2BGR)
+
+        // Освобождение
+        lab.release()
+        channels[0].release()
+        channels[1].release()
+        channels[2].release()
+        claheL.release()
+        merged.release()
+        clahe.collectGarbage()
+
+        return result
+    }
+
+    private fun enhanceSharp(input: Mat): Mat {
+        if (input.empty()) return input.clone()
+
+        val blurred = Mat()
+        Imgproc.GaussianBlur(input, blurred, Size(0.0, 0.0), 3.0)
+        val result = Mat()
+        Core.addWeighted(input, 1.5, blurred, -0.5, 0.0, result)
+        blurred.release()
+        return result
     }
 
     // ====== ОСВОБОЖДЕНИЕ РЕСУРСОВ ======

@@ -1,48 +1,93 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="#000000">
+    android:background="@color/black">
 
+    <!-- Верхняя панель -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="8dp"
+        android:background="@color/grey_900">
+
+        <ImageView
+            android:id="@+id/backButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_back"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Назад"/>
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Коррекция углов"
+            android:textColor="@color/white"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:gravity="center"/>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/autoDetectButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Авто"
+            app:backgroundTint="@color/primary"
+            android:textColor="@color/white"/>
+    </LinearLayout>
+
+    <!-- Область изображения -->
     <ImageView
         android:id="@+id/cropImage"
         android:contentDescription="Обрезка документа"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:scaleType="fitCenter"/>
+        android:scaleType="fitCenter"
+        android:background="@color/black"/>
 
+    <!-- Нижняя панель с кнопками -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:padding="16dp"
-        android:background="#1A1A1A">
+        android:background="@color/grey_900">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:layout_marginBottom="8dp">
+            android:layout_marginBottom="12dp">
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/originalButton"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="0dp"
-                android:layout_height="44dp"
+                android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="📷 Исходное"
-                android:textSize="13sp"
-                android:layout_marginEnd="6dp"/>
+                android:text="Исходное"
+                android:textColor="@color/white"
+                app:strokeColor="@color/primary"
+                android:layout_marginEnd="8dp"/>
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/manualButton"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="0dp"
-                android:layout_height="44dp"
+                android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="📐 Ручная"
-                android:textSize="13sp"
-                android:layout_marginStart="6dp"/>
+                android:text="Ручная"
+                android:textColor="@color/white"
+                app:strokeColor="@color/primary"
+                android:layout_marginStart="8dp"/>
         </LinearLayout>
 
         <LinearLayout
@@ -50,23 +95,27 @@
             android:layout_height="wrap_content"
             android:orientation="horizontal">
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/applyButton"
+                style="@style/Widget.MaterialComponents.Button"
                 android:layout_width="0dp"
-                android:layout_height="48dp"
+                android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="✅ Применить"
-                android:textSize="14sp"
-                android:layout_marginEnd="6dp"/>
+                android:text="Применить"
+                android:textColor="@color/white"
+                app:backgroundTint="@color/primary"
+                android:layout_marginEnd="8dp"/>
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/cancelButton"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="0dp"
-                android:layout_height="48dp"
+                android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="❌ Отмена"
-                android:textSize="14sp"
-                android:layout_marginStart="6dp"/>
+                android:text="Отмена"
+                android:textColor="@color/white"
+                app:strokeColor="@color/grey_500"
+                android:layout_marginStart="8dp"/>
         </LinearLayout>
     </LinearLayout>
 

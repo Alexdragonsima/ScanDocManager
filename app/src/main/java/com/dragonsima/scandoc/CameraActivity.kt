@@ -49,6 +49,7 @@ class CameraActivity : AppCompatActivity() {
     private val analysisExecutor = Executors.newSingleThreadExecutor()
     private val processingExecutor = Executors.newSingleThreadExecutor()
     private val saveExecutor = Executors.newSingleThreadExecutor()
+    private var currentFilter: String = "bw"
 
     // Потокобезопасные данные
     private val isProcessing = AtomicBoolean(false)
@@ -115,6 +116,9 @@ class CameraActivity : AppCompatActivity() {
         shutdownExecutors()
         releaseResources()
         FileManager.cleanCache(this) // ← добавить
+        if (::cameraProvider.isInitialized) {
+            cameraProvider.unbindAll()
+        }
     }
 
     // ----- Инициализация UI -----
@@ -364,7 +368,7 @@ class CameraActivity : AppCompatActivity() {
                 if (corners != null && corners.size == 4) {
                     processImageWithCorners(image, corners)
                 } else {
-                    DocumentDetector.enhanceScan(image, "bw")
+                    DocumentDetector.enhanceScan(image, currentFilter)
                 }
             }
 
@@ -387,20 +391,26 @@ class CameraActivity : AppCompatActivity() {
 
     private fun processImageWithCorners(image: Mat, corners: Array<Point>): Mat? {
         var warped: Mat? = null
-        var noShadows: Mat? = null
-        var cropped: Mat? = null
         var enhanced: Mat? = null
 
         try {
             warped = DocumentDetector.warpDocument(image, corners) ?: return null
-            noShadows = DocumentDetector.removeShadows(warped)
-            cropped = DocumentDetector.autoCropMargins(noShadows) ?: return null
-            enhanced = DocumentDetector.enhanceScan(cropped, "bw")
+
+            // Если выбран фильтр "shadow" — сначала базовая бинаризация, потом удаление теней и обрезка
+            if (currentFilter == "shadow") {
+                val bw = DocumentDetector.enhanceScan(warped, "bw")
+                val noShadows = DocumentDetector.removeShadows(bw)   // removeShadows работает с BGR, bw уже BGR
+                val cropped = DocumentDetector.autoCropMargins(noShadows)
+                bw.release()
+                noShadows.release()
+                enhanced = cropped
+            } else {
+                enhanced = DocumentDetector.enhanceScan(warped, currentFilter)
+            }
+
             return enhanced
         } finally {
             warped?.release()
-            noShadows?.release()
-            cropped?.release()
         }
     }
 
@@ -429,6 +439,8 @@ class CameraActivity : AppCompatActivity() {
 
     private fun retakePicture() {
         // Не удаляем файлы, просто обнуляем ссылки (файлы будут удалены позже или системой)
+        deleteFileIfExists(originalImagePath.get())
+        deleteFileIfExists(processedImagePath.get())
         originalImagePath.set(null)
         processedImagePath.set(null)
         setResultBitmap(null)
@@ -554,7 +566,12 @@ class CameraActivity : AppCompatActivity() {
                     if (Imgcodecs.imwrite(processedFile.absolutePath, processedMat)) {
                         processedImagePath.set(processedFile.absolutePath)
                         val bitmap = FileManager.matToBitmap(processedMat)
-                        processedMat.release()
+                        if (bitmap != null) {
+                            processedImagePath.set(processedFile.absolutePath)
+                        } else {
+                            processedFile.delete()
+                            processedImagePath.set(null)
+                        }
 
                         // Проверяем, что путь к оригиналу не изменился
                         if (originalImagePath.get() == originalPath) {
@@ -628,4 +645,5 @@ class CameraActivity : AppCompatActivity() {
         processedImagePath.set(null)
         DocumentDetector.release()
     }
+
 }
