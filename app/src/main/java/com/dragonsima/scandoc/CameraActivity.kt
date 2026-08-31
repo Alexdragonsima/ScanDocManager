@@ -26,10 +26,29 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.delay
+import java.util.concurrent.CountDownLatch
+import org.opencv.features.ORB
+import org.opencv.features.DescriptorMatcher
+import org.opencv.core.MatOfKeyPoint
+import org.opencv.core.MatOfDMatch
+import org.opencv.core.MatOfPoint2f
+import org.opencv.geometry.Geometry
+import org.opencv.imgproc.Imgproc
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import com.google.android.material.button.MaterialButton
+import org.opencv.core.CvType
+import org.opencv.photo.Photo
+import kotlin.time.Duration.Companion.milliseconds
 
 class CameraActivity : AppCompatActivity() {
 
-    // UI элементы
+    // UI
     private lateinit var previewView: PreviewView
     private lateinit var overlay: OverlayView
     private lateinit var captureButton: Button
@@ -40,33 +59,35 @@ class CameraActivity : AppCompatActivity() {
     private lateinit var resultImageView: ImageView
     private lateinit var backButton: Button
     private lateinit var progressBar: ProgressBar
+    private lateinit var hdrButton: MaterialButton
 
-    // Камера
+    @Volatile
+    private var hdrEnabled = false
+
+    @Volatile
+    private var currentFilter: String = "bw"
+
     private lateinit var cameraProvider: ProcessCameraProvider
     private var imageCapture: ImageCapture? = null
+    private var camera: Camera? = null
 
-    // Исполнители (разделены по назначению)
     private val analysisExecutor = Executors.newSingleThreadExecutor()
     private val processingExecutor = Executors.newSingleThreadExecutor()
     private val saveExecutor = Executors.newSingleThreadExecutor()
-    private var currentFilter: String = "bw"
 
-    // Потокобезопасные данные
     private val isProcessing = AtomicBoolean(false)
+    private val analysisPaused = AtomicBoolean(false)
     private val lastDetectedCorners = AtomicReference<Array<Point>?>(null)
     private val lastImageWidth = AtomicLong(0)
     private val lastImageHeight = AtomicLong(0)
 
-    // Пути к файлам (безопасно для многопоточности)
     private val originalImagePath = AtomicReference<String?>(null)
     private val processedImagePath = AtomicReference<String?>(null)
     private val currentResultBitmap = AtomicReference<Bitmap?>(null)
 
-    // Троттлинг анализа кадров
     private val lastFrameProcessedTime = AtomicLong(0L)
     private val minFrameIntervalMs = 300L
 
-    // Разрешение камеры
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
@@ -77,7 +98,6 @@ class CameraActivity : AppCompatActivity() {
         }
     }
 
-    // Ручная обрезка
     private val cropResultLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -115,13 +135,11 @@ class CameraActivity : AppCompatActivity() {
         super.onDestroy()
         shutdownExecutors()
         releaseResources()
-        FileManager.cleanCache(this) // ← добавить
+        FileManager.cleanCache(this)
         if (::cameraProvider.isInitialized) {
             cameraProvider.unbindAll()
         }
     }
-
-    // ----- Инициализация UI -----
 
     private fun initViews() {
         previewView = findViewById(R.id.previewView)
@@ -134,9 +152,9 @@ class CameraActivity : AppCompatActivity() {
         actionsLayout = findViewById(R.id.actionsLayout)
         backButton = findViewById(R.id.backButton)
         progressBar = findViewById(R.id.progressBar)
+        hdrButton = findViewById(R.id.hdrButton)
 
         previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
-
         actionsLayout.visibility = View.GONE
         retakeButton.visibility = View.GONE
         cropButton.visibility = View.GONE
@@ -146,13 +164,35 @@ class CameraActivity : AppCompatActivity() {
 
     private fun setupButtons() {
         backButton.setOnClickListener { finish() }
-        captureButton.setOnClickListener { takePicture() }
         saveResultButton.setOnClickListener { saveDocument() }
         retakeButton.setOnClickListener { retakePicture() }
         cropButton.setOnClickListener { cropDocument() }
+
+        hdrButton.setOnClickListener {
+            hdrEnabled = !hdrEnabled
+            updateHdrButtonState()
+        }
+
+        captureButton.setOnClickListener {
+            if (hdrEnabled) captureHDRAndProcess()
+            else takePicture()
+        }
+
+        hdrEnabled = false
+        updateHdrButtonState()
     }
 
-    // ----- Разрешения и запуск камеры -----
+    private fun updateHdrButtonState() {
+        if (hdrEnabled) {
+            hdrButton.isActivated = true
+            hdrButton.text = "HDR: ВКЛ"
+            hdrButton.setBackgroundColor(android.graphics.Color.parseColor("#4F46E5"))
+        } else {
+            hdrButton.isActivated = false
+            hdrButton.text = "HDR: ВЫКЛ"
+            hdrButton.setBackgroundColor(android.graphics.Color.parseColor("#9E9E9E"))
+        }
+    }
 
     private fun hasCameraPermission(): Boolean {
         return ContextCompat.checkSelfPermission(
@@ -174,10 +214,26 @@ class CameraActivity : AppCompatActivity() {
                 val imageAnalysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
-                    .setTargetResolution(android.util.Size(640, 480))
+                    .setResolutionSelector(
+                        ResolutionSelector.Builder()
+                            .setResolutionStrategy(
+                                ResolutionStrategy(
+                                    android.util.Size(640, 480),
+                                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                                )
+                            )
+                            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                            .build()
+                    )
                     .build()
 
                 imageAnalysis.setAnalyzer(analysisExecutor) { imageProxy ->
+                    // Если анализ приостановлен, просто закрываем кадр
+                    if (analysisPaused.get()) {
+                        imageProxy.close()
+                        return@setAnalyzer
+                    }
+
                     val now = System.currentTimeMillis()
                     if (now - lastFrameProcessedTime.get() < minFrameIntervalMs) {
                         imageProxy.close()
@@ -203,7 +259,7 @@ class CameraActivity : AppCompatActivity() {
                     .build()
 
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
+                camera = cameraProvider.bindToLifecycle(
                     this,
                     CameraSelector.DEFAULT_BACK_CAMERA,
                     preview,
@@ -220,8 +276,6 @@ class CameraActivity : AppCompatActivity() {
             }
         }, ContextCompat.getMainExecutor(this))
     }
-
-    // ----- Съёмка -----
 
     private fun takePicture() {
         val capture = imageCapture ?: run {
@@ -246,21 +300,35 @@ class CameraActivity : AppCompatActivity() {
                             val detected = lastDetectedCorners.get()
                             val imgWidth = lastImageWidth.get().toInt()
                             val imgHeight = lastImageHeight.get().toInt()
-                            val processedBitmap = processCapturedImage(photoFile.absolutePath, detected, imgWidth, imgHeight)
+                            val processedBitmap = processCapturedImage(
+                                photoFile.absolutePath,
+                                detected,
+                                imgWidth,
+                                imgHeight
+                            )
 
-                            // Проверяем, что путь к оригиналу не изменился (гонка)
                             val currentOriginal = originalImagePath.get()
                             runOnUiThread {
                                 progressBar.visibility = View.GONE
                                 captureButton.isEnabled = true
                                 if (processedBitmap != null && currentOriginal == photoFile.absolutePath) {
-                                    currentResultBitmap.set(processedBitmap)
+                                    setResultBitmap(processedBitmap)
                                     showResult()
-                                } else if (processedBitmap == null) {
-                                    Toast.makeText(this@CameraActivity, "Не удалось обработать фото", Toast.LENGTH_SHORT).show()
                                 } else {
-                                    // Результат устарел
-                                    processedBitmap.recycle()
+                                    processedBitmap?.recycle()
+                                    if (processedBitmap == null) {
+                                        Toast.makeText(
+                                            this@CameraActivity,
+                                            "Не удалось обработать фото",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    } else {
+                                        Toast.makeText(
+                                            this@CameraActivity,
+                                            "Результат устарел",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
                                 }
                             }
                         } catch (e: Exception) {
@@ -268,7 +336,11 @@ class CameraActivity : AppCompatActivity() {
                             runOnUiThread {
                                 progressBar.visibility = View.GONE
                                 captureButton.isEnabled = true
-                                Toast.makeText(this@CameraActivity, "Ошибка обработки", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(
+                                    this@CameraActivity,
+                                    "Ошибка обработки",
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
                         }
                     }
@@ -278,15 +350,17 @@ class CameraActivity : AppCompatActivity() {
                     runOnUiThread {
                         progressBar.visibility = View.GONE
                         captureButton.isEnabled = true
-                        Toast.makeText(this@CameraActivity, "Ошибка съёмки: ${exception.message}", Toast.LENGTH_LONG).show()
+                        Toast.makeText(
+                            this@CameraActivity,
+                            "Ошибка съёмки: ${exception.message}",
+                            Toast.LENGTH_LONG
+                        ).show()
                     }
                     Log.e(TAG, "Capture error", exception)
                 }
             }
         )
     }
-
-    // ----- Обработка кадра анализа (превью) -----
 
     private fun processFrame(imageProxy: ImageProxy) {
         val bitmap = imageProxy.toBitmap()
@@ -334,8 +408,6 @@ class CameraActivity : AppCompatActivity() {
         }
     }
 
-    // ----- Обработка захваченного изображения -----
-
     private fun processCapturedImage(
         imagePath: String,
         detectedCorners: Array<Point>?,
@@ -356,21 +428,22 @@ class CameraActivity : AppCompatActivity() {
         var resultBitmap: Bitmap? = null
 
         try {
-            val processedMat = if (detectedCorners != null && detectedCorners.size == 4 && imgWidth > 0 && imgHeight > 0) {
-                val scaleX = image.cols().toDouble() / imgWidth
-                val scaleY = image.rows().toDouble() / imgHeight
-                val scaledCorners = Array(4) { i ->
-                    Point(detectedCorners[i].x * scaleX, detectedCorners[i].y * scaleY)
-                }
-                processImageWithCorners(image, scaledCorners)
-            } else {
-                val corners = DocumentDetector.findDocumentCorners(image)
-                if (corners != null && corners.size == 4) {
-                    processImageWithCorners(image, corners)
+            val processedMat =
+                if (detectedCorners != null && detectedCorners.size == 4 && imgWidth > 0 && imgHeight > 0) {
+                    val scaleX = image.cols().toDouble() / imgWidth
+                    val scaleY = image.rows().toDouble() / imgHeight
+                    val scaledCorners = Array(4) { i ->
+                        Point(detectedCorners[i].x * scaleX, detectedCorners[i].y * scaleY)
+                    }
+                    processImageWithCorners(image, scaledCorners)
                 } else {
-                    DocumentDetector.enhanceScan(image, currentFilter)
+                    val corners = DocumentDetector.findDocumentCorners(image)
+                    if (corners != null && corners.size == 4) {
+                        processImageWithCorners(image, corners)
+                    } else {
+                        DocumentDetector.enhanceScan(image, currentFilter)
+                    }
                 }
-            }
 
             if (processedMat != null) {
                 val processedFile = File(cacheDir, "processed_${System.currentTimeMillis()}.jpg")
@@ -389,22 +462,35 @@ class CameraActivity : AppCompatActivity() {
         return resultBitmap
     }
 
+    // ===================== ИСПРАВЛЕННАЯ ОБРАБОТКА С УГЛАМИ =====================
     private fun processImageWithCorners(image: Mat, corners: Array<Point>): Mat? {
         var warped: Mat? = null
         var enhanced: Mat? = null
 
         try {
-            warped = DocumentDetector.warpDocument(image, corners) ?: return null
+            warped = DocumentDetector.warpDocument(image, corners)
+            if (warped == null) {
+                Log.e(TAG, "warpDocument вернул null")
+                return null
+            }
 
-            // Если выбран фильтр "shadow" — сначала базовая бинаризация, потом удаление теней и обрезка
             if (currentFilter == "shadow") {
+                // 1. Бинаризация (1 канал)
                 val bw = DocumentDetector.enhanceScan(warped, "bw")
-                val noShadows = DocumentDetector.removeShadows(bw)   // removeShadows работает с BGR, bw уже BGR
+                // 2. Преобразуем в BGR (3 канала) для removeShadows
+                val bwBgr = Mat()
+                Imgproc.cvtColor(bw, bwBgr, Imgproc.COLOR_GRAY2BGR)
+                // 3. Удаляем тени
+                val noShadows = DocumentDetector.removeShadows(bwBgr)
+                // 4. Обрезаем поля
                 val cropped = DocumentDetector.autoCropMargins(noShadows)
+                // Освобождаем промежуточные
                 bw.release()
+                bwBgr.release()
                 noShadows.release()
                 enhanced = cropped
             } else {
+                // Обычные фильтры
                 enhanced = DocumentDetector.enhanceScan(warped, currentFilter)
             }
 
@@ -414,7 +500,7 @@ class CameraActivity : AppCompatActivity() {
         }
     }
 
-    // ----- Отображение результата -----
+    // ---------------------- ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ UI ----------------------
 
     private fun showResult() {
         previewView.visibility = View.GONE
@@ -426,10 +512,14 @@ class CameraActivity : AppCompatActivity() {
         retakeButton.visibility = View.VISIBLE
         cropButton.visibility = View.VISIBLE
         saveResultButton.visibility = View.VISIBLE
+        hdrButton.visibility = View.GONE
     }
 
     private fun setResultBitmap(newBitmap: Bitmap?) {
-        currentResultBitmap.getAndSet(null)?.recycle()
+        val old = currentResultBitmap.getAndSet(null)
+        if (old != null && !old.isRecycled) {
+            old.recycle()
+        }
         currentResultBitmap.set(newBitmap)
     }
 
@@ -438,7 +528,6 @@ class CameraActivity : AppCompatActivity() {
     }
 
     private fun retakePicture() {
-        // Не удаляем файлы, просто обнуляем ссылки (файлы будут удалены позже или системой)
         deleteFileIfExists(originalImagePath.get())
         deleteFileIfExists(processedImagePath.get())
         originalImagePath.set(null)
@@ -457,10 +546,9 @@ class CameraActivity : AppCompatActivity() {
         retakeButton.visibility = View.GONE
         cropButton.visibility = View.GONE
         saveResultButton.visibility = View.GONE
+        hdrButton.visibility = View.VISIBLE
         overlay.setCorners(null)
     }
-
-    // ----- Сохранение PDF -----
 
     private fun saveDocument() {
         val path = processedImagePath.get()
@@ -497,7 +585,6 @@ class CameraActivity : AppCompatActivity() {
                     Toast.makeText(this, "✅ Сохранено: ${pdfFile.name}", Toast.LENGTH_LONG).show()
                     finish()
                 }
-                // Удаляем обработанный файл после успешного сохранения
                 deleteFileIfExists(path)
                 processedImagePath.set(null)
             } catch (e: Exception) {
@@ -505,15 +592,14 @@ class CameraActivity : AppCompatActivity() {
                 runOnUiThread {
                     progressBar.visibility = View.GONE
                     saveResultButton.isEnabled = true
-                    Toast.makeText(this, "Ошибка сохранения: ${e.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Ошибка сохранения: ${e.message}", Toast.LENGTH_LONG)
+                        .show()
                 }
             } finally {
                 image.release()
             }
         }
     }
-
-    // ----- Ручная обрезка -----
 
     private fun cropDocument() {
         val originalPath = originalImagePath.get()
@@ -522,7 +608,6 @@ class CameraActivity : AppCompatActivity() {
             return
         }
 
-        // Создаём временную копию
         val tempFile = File(cacheDir, "crop_temp_${System.currentTimeMillis()}.jpg")
         try {
             File(originalPath).copyTo(tempFile, overwrite = true)
@@ -537,7 +622,7 @@ class CameraActivity : AppCompatActivity() {
 
         val cropIntent = Intent(this, CropActivity::class.java).apply {
             putExtra("imagePath", tempFile.absolutePath)
-            putExtra("tempFilePath", tempFile.absolutePath) // будет удалён после возврата
+            putExtra("tempFilePath", tempFile.absolutePath)
         }
         cropResultLauncher.launch(cropIntent)
     }
@@ -547,14 +632,18 @@ class CameraActivity : AppCompatActivity() {
             try {
                 if (!File(originalPath).exists()) {
                     Log.w(TAG, "Original file not found")
-                    runOnUiThread { Toast.makeText(this, "Файл не найден", Toast.LENGTH_SHORT).show() }
+                    runOnUiThread {
+                        Toast.makeText(this, "Файл не найден", Toast.LENGTH_SHORT).show()
+                    }
                     return@execute
                 }
 
                 val image = Imgcodecs.imread(originalPath)
                 if (image.empty()) {
                     image.release()
-                    runOnUiThread { Toast.makeText(this, "Ошибка чтения", Toast.LENGTH_SHORT).show() }
+                    runOnUiThread {
+                        Toast.makeText(this, "Ошибка чтения", Toast.LENGTH_SHORT).show()
+                    }
                     return@execute
                 }
 
@@ -564,31 +653,34 @@ class CameraActivity : AppCompatActivity() {
                 if (processedMat != null) {
                     val processedFile = File(cacheDir, "processed_${System.currentTimeMillis()}.jpg")
                     if (Imgcodecs.imwrite(processedFile.absolutePath, processedMat)) {
-                        processedImagePath.set(processedFile.absolutePath)
                         val bitmap = FileManager.matToBitmap(processedMat)
                         if (bitmap != null) {
                             processedImagePath.set(processedFile.absolutePath)
-                        } else {
-                            processedFile.delete()
-                            processedImagePath.set(null)
-                        }
-
-                        // Проверяем, что путь к оригиналу не изменился
-                        if (originalImagePath.get() == originalPath) {
-                            runOnUiThread {
-                                setResultBitmap(bitmap)
-                                showResult()
+                            if (originalImagePath.get() == originalPath) {
+                                runOnUiThread {
+                                    setResultBitmap(bitmap)
+                                    showResult()
+                                }
+                            } else {
+                                bitmap.recycle()
+                                processedFile.delete()
                             }
                         } else {
-                            bitmap.recycle()
                             processedFile.delete()
+                            runOnUiThread {
+                                Toast.makeText(this, "Ошибка создания Bitmap", Toast.LENGTH_SHORT).show()
+                            }
                         }
                     } else {
-                        processedMat.release()
-                        runOnUiThread { Toast.makeText(this, "Ошибка сохранения", Toast.LENGTH_SHORT).show() }
+                        runOnUiThread {
+                            Toast.makeText(this, "Ошибка сохранения", Toast.LENGTH_SHORT).show()
+                        }
                     }
+                    processedMat.release()
                 } else {
-                    runOnUiThread { Toast.makeText(this, "Ошибка обработки", Toast.LENGTH_SHORT).show() }
+                    runOnUiThread {
+                        Toast.makeText(this, "Ошибка обработки", Toast.LENGTH_SHORT).show()
+                    }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "processImageFromPath error", e)
@@ -596,8 +688,6 @@ class CameraActivity : AppCompatActivity() {
             }
         }
     }
-
-    // ----- Трансформация углов для отображения -----
 
     private fun transformCornersToView(
         corners: Array<Point>?,
@@ -619,8 +709,6 @@ class CameraActivity : AppCompatActivity() {
             Point(corners[i].x * scale + offsetX, corners[i].y * scale + offsetY)
         }
     }
-
-    // ----- Завершение работы -----
 
     private fun shutdownExecutors() {
         analysisExecutor.shutdown()
@@ -646,4 +734,291 @@ class CameraActivity : AppCompatActivity() {
         DocumentDetector.release()
     }
 
+    // ===================== HDR =====================
+
+    private suspend fun captureHDRFrames(): List<File> = withContext(Dispatchers.IO) {
+        val exposures = listOf(-2, 0, 2)
+        val files = mutableListOf<File>()
+        val cameraControl = camera?.cameraControl ?: return@withContext emptyList()
+
+        val exposureRange = camera?.cameraInfo?.exposureState?.exposureCompensationRange
+        val minEv = exposureRange?.lower ?: -2
+        val maxEv = exposureRange?.upper ?: 2
+        // Фильтруем только допустимые значения
+        val safeExposures = exposures.filter { it in minEv..maxEv }
+
+        if (safeExposures.size < 3) {
+            Log.w(TAG, "Недостаточно доступных значений EV для HDR")
+            return@withContext emptyList()
+        }
+
+        try {
+            for (ev in safeExposures) {
+                cameraControl.setExposureCompensationIndex(ev)
+                delay(250.milliseconds) // даём камере стабилизироваться
+
+                val file = File(cacheDir, "hdr_${System.currentTimeMillis()}_$ev.jpg")
+                val outputOptions = ImageCapture.OutputFileOptions.Builder(file).build()
+                val latch = CountDownLatch(1)
+                var success = false
+
+                imageCapture?.takePicture(
+                    outputOptions,
+                    ContextCompat.getMainExecutor(this@CameraActivity),
+                    object : ImageCapture.OnImageSavedCallback {
+                        override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                            success = true
+                            latch.countDown()
+                        }
+
+                        override fun onError(exception: ImageCaptureException) {
+                            Log.e(TAG, "HDR capture error for EV $ev", exception)
+                            latch.countDown()
+                        }
+                    }
+                )
+
+                if (latch.await(5, TimeUnit.SECONDS)) {
+                    if (success) {
+                        files.add(file)
+                    } else {
+                        file.delete()
+                        break
+                    }
+                } else {
+                    Log.e(TAG, "Timeout waiting for HDR frame EV $ev")
+                    file.delete()
+                    break
+                }
+            }
+        } finally {
+            // Сбрасываем экспозицию
+            try {
+                cameraControl.setExposureCompensationIndex(0)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to reset exposure compensation", e)
+            }
+        }
+
+        files
+    }
+
+    // Улучшенное выравнивание с полным освобождением ресурсов
+    private fun alignImages(reference: Mat, target: Mat): Mat {
+        if (reference.empty() || target.empty()) return target.clone()
+
+        var refGray: Mat? = null
+        var tgtGray: Mat? = null
+        var keypointsRef: MatOfKeyPoint? = null
+        var keypointsTarget: MatOfKeyPoint? = null
+        var descriptorsRef: Mat? = null
+        var descriptorsTarget: Mat? = null
+        var matches: MatOfDMatch? = null
+        var srcPoints: MatOfPoint2f? = null
+        var dstPoints: MatOfPoint2f? = null
+        var homography: Mat? = null
+        var aligned: Mat? = null
+        var orb: ORB? = null
+        var matcher: DescriptorMatcher? = null
+
+        return try {
+            orb = ORB.create(500)
+            matcher = DescriptorMatcher.create(DescriptorMatcher.BRUTEFORCE_HAMMING)
+
+            refGray = Mat()
+            tgtGray = Mat()
+            Imgproc.cvtColor(reference, refGray, Imgproc.COLOR_BGR2GRAY)
+            Imgproc.cvtColor(target, tgtGray, Imgproc.COLOR_BGR2GRAY)
+
+            keypointsRef = MatOfKeyPoint()
+            keypointsTarget = MatOfKeyPoint()
+            descriptorsRef = Mat()
+            descriptorsTarget = Mat()
+
+            orb.detectAndCompute(refGray, Mat(), keypointsRef, descriptorsRef)
+            orb.detectAndCompute(tgtGray, Mat(), keypointsTarget, descriptorsTarget)
+
+            if (keypointsRef.total() < 4 || keypointsTarget.total() < 4) {
+                return target.clone()
+            }
+
+            matches = MatOfDMatch()
+            matcher.match(descriptorsRef, descriptorsTarget, matches)
+
+            val list = matches.toList().sortedBy { it.distance }.take(30)
+            if (list.size < 4) return target.clone()
+
+            val refKpArray = keypointsRef.toArray()
+            val tgtKpArray = keypointsTarget.toArray()
+
+            val srcPts = list.map { tgtKpArray[it.trainIdx].pt }.toTypedArray()
+            val dstPts = list.map { refKpArray[it.queryIdx].pt }.toTypedArray()
+
+            srcPoints = MatOfPoint2f(*srcPts)
+            dstPoints = MatOfPoint2f(*dstPts)
+
+            homography = Geometry.findHomography(srcPoints, dstPoints, Geometry.RANSAC, 5.0)
+            if (homography.empty()) return target.clone()
+
+            aligned = Mat()
+            Imgproc.warpPerspective(target, aligned, homography, reference.size())
+            aligned
+        } catch (e: Exception) {
+            Log.e(TAG, "alignImages error", e)
+            target.clone()
+        } finally {
+            refGray?.release()
+            tgtGray?.release()
+            keypointsRef?.release()
+            keypointsTarget?.release()
+            descriptorsRef?.release()
+            descriptorsTarget?.release()
+            matches?.release()
+            srcPoints?.release()
+            dstPoints?.release()
+            homography?.release()
+            // ORB и DescriptorMatcher не имеют release(), вызываем delete()
+            orb?.clear()
+            matcher?.clear()
+        }
+    }
+
+    // Слияние HDR с конвертацией в 8-битный формат
+    private fun mergeHDR(images: List<Mat>): Mat {
+        require(images.size >= 3) { "Нужно минимум 3 кадра" }
+        val merger = Photo.createMergeMertens()
+        val resultFloat = Mat()
+        try {
+            merger.process(images, resultFloat)
+            // Конвертируем float (0..1) в 8-битный BGR (0..255)
+            val result8u = Mat()
+            resultFloat.convertTo(result8u, CvType.CV_8UC3, 255.0)
+            return result8u
+        } finally {
+            merger.clear()
+            resultFloat.release()
+        }
+    }
+
+    private fun captureHDRAndProcess() {
+        progressBar.visibility = View.VISIBLE
+        hdrButton.isEnabled = false
+        captureButton.isEnabled = false
+
+        processingExecutor.execute {
+            val frames = mutableListOf<File>()
+            val mats = mutableListOf<Mat>()
+            val aligned = mutableListOf<Mat>()
+            var merged8u: Mat? = null
+            var processed: Mat? = null
+
+            try {
+                // Съёмка кадров (с повторными попытками)
+                analysisPaused.set(true)
+                frames.addAll(runBlocking { captureHDRFrames() })
+                if (frames.size < 3) {
+                    runOnUiThread {
+                        progressBar.visibility = View.GONE
+                        hdrButton.isEnabled = true
+                        captureButton.isEnabled = true
+                        Toast.makeText(
+                            this,
+                            "Ошибка HDR: не удалось снять кадры",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    return@execute
+                }
+
+                // Загружаем Mat
+                for (file in frames) {
+                    val mat = Imgcodecs.imread(file.absolutePath)
+                    if (!mat.empty()) mats.add(mat)
+                }
+                if (mats.size < 3) {
+                    runOnUiThread {
+                        progressBar.visibility = View.GONE
+                        hdrButton.isEnabled = true
+                        captureButton.isEnabled = true
+                        Toast.makeText(this, "Ошибка HDR: недостаточно кадров", Toast.LENGTH_SHORT).show()
+                    }
+                    return@execute
+                }
+
+                // Выравнивание (используем средний кадр как референс)
+                val reference = mats[1]
+                for (i in mats.indices) {
+                    if (i == 1) {
+                        aligned.add(reference.clone())
+                    } else {
+                        val alignedMat = alignImages(reference, mats[i])
+                        aligned.add(alignedMat)
+                    }
+                }
+
+                // Слияние
+                val mergedFloat = mergeHDR(aligned)
+                merged8u = mergedFloat // уже 8-битный
+
+                // Детекция документа и обработка
+                val corners = DocumentDetector.findDocumentCorners(merged8u)
+                processed = if (corners != null && corners.size == 4) {
+                    processImageWithCorners(merged8u, corners)
+                } else {
+                    DocumentDetector.enhanceScan(merged8u, currentFilter)
+                }
+
+                if (processed == null) {
+                    runOnUiThread {
+                        progressBar.visibility = View.GONE
+                        hdrButton.isEnabled = true
+                        captureButton.isEnabled = true
+                        Toast.makeText(this, "Ошибка обработки HDR", Toast.LENGTH_SHORT).show()
+                    }
+                    return@execute
+                }
+
+                // Сохраняем результат
+                val processedFile = File(cacheDir, "processed_hdr_${System.currentTimeMillis()}.jpg")
+                if (Imgcodecs.imwrite(processedFile.absolutePath, processed)) {
+                    processedImagePath.set(processedFile.absolutePath)
+                    val bitmap = FileManager.matToBitmap(processed)
+                    runOnUiThread {
+                        progressBar.visibility = View.GONE
+                        hdrButton.isEnabled = true
+                        captureButton.isEnabled = true
+                        if (bitmap != null) {
+                            setResultBitmap(bitmap)
+                            showResult()
+                        } else {
+                            Toast.makeText(this, "Ошибка создания Bitmap", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                } else {
+                    runOnUiThread {
+                        progressBar.visibility = View.GONE
+                        hdrButton.isEnabled = true
+                        captureButton.isEnabled = true
+                        Toast.makeText(this, "Ошибка обработки HDR", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "HDR error", e)
+                runOnUiThread {
+                    progressBar.visibility = View.GONE
+                    hdrButton.isEnabled = true
+                    captureButton.isEnabled = true
+                    Toast.makeText(this, "Ошибка HDR: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            } finally {
+                analysisPaused.set(false)
+
+                mats.forEach { it.release() }
+                aligned.forEach { it.release() }
+                merged8u?.release()
+                processed?.release()
+                frames.forEach { it.delete() }
+            }
+        }
+    }
 }

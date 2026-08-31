@@ -811,8 +811,11 @@ object DocumentDetector {
                 return null
             }
         }
-
-        if (!isValidQuad(corners)) return null
+        Log.d(TAG, "warpDocument получил углы: ${corners.joinToString { "(${it.x.toInt()}, ${it.y.toInt()})" }}")
+        if (!isValidQuad(corners)) {
+            Log.e(TAG, "Углы не прошли isValidQuad: ${corners.joinToString { "(${it.x.toInt()}, ${it.y.toInt()})" }}")
+            return null
+        }
 
         return try {
             val ordered = orderCorners(corners)
@@ -1005,8 +1008,19 @@ object DocumentDetector {
             Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C,
             Imgproc.THRESH_BINARY,
             15,
-            10.0
+            5.0
         )
+
+        // Проверяем, не слишком ли белый результат
+        val whiteRatio = Core.countNonZero(result).toDouble() / (result.rows() * result.cols())
+        if (whiteRatio > 0.98) {
+            // Почти всё белое — возвращаем grayscale с усилением контраста
+            val enhancedGray = Mat()
+            Core.normalize(gray, enhancedGray, 0.0, 255.0, Core.NORM_MINMAX)
+            gray.release()
+            return enhancedGray
+        }
+
         gray.release()
         return result
     }
