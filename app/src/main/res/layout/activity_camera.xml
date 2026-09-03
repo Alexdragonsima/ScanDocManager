@@ -8,28 +8,13 @@
     <androidx.camera.view.PreviewView
         android:id="@+id/previewView"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent" >
+    </androidx.camera.view.PreviewView>
 
     <com.dragonsima.scandoc.OverlayView
         android:id="@+id/overlayView"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"/>
-
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/hdrButton"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="top|end"
-        android:layout_marginTop="70dp"
-        android:layout_marginEnd="12dp"
-        android:text="HDR"
-        android:textColor="@color/white"
-        app:backgroundTint="@color/grey_500"
-        app:cornerRadius="20dp"
-        android:insetTop="0dp"
-        android:insetBottom="0dp"
-        android:stateListAnimator="@null"
-        android:elevation="4dp"/>
+        android:layout_height="match_parent" />
 
     <ImageView
         android:id="@+id/resultImageView"
@@ -48,45 +33,60 @@
 
     <!-- Верхняя панель -->
     <LinearLayout
-        android:layout_width="match_parent"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_gravity="top"
+        android:layout_gravity="top|start|end"
         android:orientation="horizontal"
-        android:padding="12dp"
-        android:gravity="center_vertical"
-        android:baselineAligned="false">
+        android:layout_marginTop="2dp"
+        android:layout_marginStart="2dp"
+        android:layout_marginEnd="2dp">
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/backButton"
             android:layout_width="48dp"
             android:layout_height="48dp"
-            android:text="←"
-            android:textSize="24sp"
-            android:textColor="@color/white"
             android:contentDescription="Назад"
+            android:elevation="4dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:minWidth="48dp"
+            android:minHeight="48dp"
+            android:stateListAnimator="@null"
+            android:text="←"
+            android:textColor="@color/white"
+            android:textSize="24sp"
             app:backgroundTint="#80000000"
             app:cornerRadius="24dp"
-            app:iconPadding="0dp"
+            app:iconPadding="0dp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/aiButton"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:elevation="4dp"
             android:insetTop="0dp"
             android:insetBottom="0dp"
             android:stateListAnimator="@null"
-            android:elevation="4dp"
-            android:minWidth="48dp"
-            android:minHeight="48dp"/>
-
-        <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Сканирование документа"
+            android:text="AI: ВЫКЛ"
             android:textColor="@color/white"
-            android:textSize="18sp"
-            android:textStyle="bold"
-            android:gravity="center"/>
+            app:backgroundTint="@color/grey_500"
+            app:cornerRadius="20dp" />
 
-        <View
-            android:layout_width="48dp"
-            android:layout_height="48dp"/>
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/hdrButton"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_marginStart="8dp"
+            android:elevation="4dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:stateListAnimator="@null"
+            android:text="HDR: ВЫКЛ"
+            android:textColor="@color/white"
+            app:backgroundTint="@color/grey_500"
+            app:cornerRadius="20dp" />
+
+
     </LinearLayout>
 
     <!-- Кнопка съёмки -->
@@ -112,7 +112,87 @@
         android:minWidth="72dp"
         android:minHeight="72dp"/>
 
-    <!-- Панель действий -->
+    <!-- ===== НОВАЯ ПАНЕЛЬ ФИЛЬТРОВ ===== -->
+    <LinearLayout
+        android:id="@+id/filterPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:padding="8dp"
+        android:background="#CC000000"
+        android:visibility="gone"
+        android:elevation="8dp">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/filterOriginal"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Оригинал"
+            android:textSize="12sp"
+            android:textColor="@color/white"
+            app:backgroundTint="@color/grey_600"
+            app:cornerRadius="16dp"
+            android:layout_marginEnd="4dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:stateListAnimator="@null"
+            android:elevation="2dp"/>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/filterColor"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Цветной"
+            android:textSize="12sp"
+            android:textColor="@color/white"
+            app:backgroundTint="@color/primary_color"
+            app:cornerRadius="16dp"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:stateListAnimator="@null"
+            android:elevation="2dp"/>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/filterBW"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Ч/Б"
+            android:textSize="12sp"
+            android:textColor="@color/white"
+            app:backgroundTint="@color/grey_600"
+            app:cornerRadius="16dp"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:stateListAnimator="@null"
+            android:elevation="2dp"/>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/filterSharp"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Резкость"
+            android:textSize="12sp"
+            android:textColor="@color/white"
+            app:backgroundTint="@color/grey_600"
+            app:cornerRadius="16dp"
+            android:layout_marginStart="4dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:stateListAnimator="@null"
+            android:elevation="2dp"/>
+    </LinearLayout>
+
+    <!-- Панель действий (переснять, обрезать, сохранить) -->
     <LinearLayout
         android:id="@+id/actionsLayout"
         android:layout_width="match_parent"

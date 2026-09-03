@@ -19,4 +19,5 @@
     <color name="black">#000000</color>
     <color name="grey_900">#1A1A1A</color>
     <color name="grey_500">#9E9E9E</color>
+    <color name="grey_600">#757575</color>
 </resources>

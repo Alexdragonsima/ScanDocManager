@@ -47,6 +47,7 @@ dependencies {
     implementation("androidx.camera:camera-view:1.6.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("com.github.bumptech.glide:glide:4.16.0")
+    implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0")
     implementation(libs.androidx.activity.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.constraintlayout)
