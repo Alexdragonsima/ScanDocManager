@@ -728,6 +728,8 @@ object DocumentDetector {
         val channels = mutableListOf<Mat>()
         var background: Mat? = null
         var diff: Mat? = null
+        var blackhat: Mat? = null
+        var kernel: Mat? = null
         var clahe: CLAHE? = null
 
         return try {
@@ -736,40 +738,57 @@ object DocumentDetector {
 
             val lChannel = channels[0]
 
-            background = Mat()
-            Imgproc.GaussianBlur(lChannel, background, Size(31.0, 31.0), 0.0)
+            // Адаптивный размер ядра ~1/20 от короткой стороны
+            val ksize = (min(image.cols(), image.rows()) / 20).coerceIn(15, 61)
+            val kernelSize = if (ksize % 2 == 0) ksize + 1 else ksize
 
+            // Оценка фона (тени + неравномерное освещение)
+            background = Mat()
+            Imgproc.GaussianBlur(lChannel, background,
+                Size(kernelSize.toDouble(), kernelSize.toDouble()), 0.0)
+
+            // Вычитание фона → выравнивание освещения
             diff = Mat()
             Core.subtract(lChannel, background, diff)
-
-            // Сдвиг вместо NORM_MINMAX, чтобы избежать инверсии
             Core.add(diff, Scalar(128.0), diff)
 
-            clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
+            // Убираем заломы: black-hat находит тонкие тёмные линии
+            kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(9.0, 9.0))
+            blackhat = Mat()
+            Imgproc.morphologyEx(diff, blackhat, Imgproc.MORPH_BLACKHAT, kernel)
+
+            // Ослабляем заломы
+            Core.subtract(diff, blackhat, diff)
+            Core.add(diff, Scalar(64.0), diff)
+
+            // Локальный контраст
+            clahe = Imgproc.createCLAHE(2.5, Size(8.0, 8.0))
             clahe.apply(diff, diff)
 
-            // Заменяем L-канал
-            lChannel.release()
-            channels[0] = diff
+            // Нормализация — избегаем "серого"
+            Core.normalize(diff, diff, 0.0, 255.0, Core.NORM_MINMAX)
+
+            // Копируем результат в L-канал
+            diff.copyTo(channels[0])
 
             val result = Mat()
             Core.merge(channels, result)
             Imgproc.cvtColor(result, result, Imgproc.COLOR_Lab2BGR)
-
             result
         } catch (e: Exception) {
-            Log.e(TAG, "removeShadows error: ${e.message}")
+            Log.e(TAG, "removeShadows error: ${e.message}", e)
             image.clone()
         } finally {
             background?.release()
+            blackhat?.release()
+            kernel?.release()
+            clahe?.clear()
             diff?.release()
-            clahe?.clear()  // или clahe?.clear()
-
-            // Освобождаем все каналы, кроме channels[0], который уже освобождён через diff
-            for (i in 1 until channels.size) {
-                channels[i].release()
+            if (channels.size >= 3) {
+                channels[0].release()
+                channels[1].release()
+                channels[2].release()
             }
-
             lab.release()
         }
     }
@@ -781,20 +800,88 @@ object DocumentDetector {
 
     fun enhanceScan(input: Mat, filter: String = "bw"): Mat {
         val result = when (filter) {
-            "bw" -> enhanceBw(input)       // возвращает grayscale
-            "color" -> enhanceColor(input) // возвращает BGR
-            "sharp" -> enhanceSharp(input) // возвращает BGR
-            "shadow" -> enhanceBw(input)   // базовая ЧБ, дальше removeShadows отдельно
+            "bw" -> enhanceBwAuto(input)
+            "color" -> enhanceColor(input)
+            "sharp" -> enhanceSharp(input)
+            "shadow" -> removeShadows(input)
+            "gray" -> enhanceGray(input)       // новый
+            "photo" -> enhancePhoto(input)     // новый
             else -> input.clone()
         }
 
-        // Гарантируем 3 канала на выходе
         if (result.channels() == 1) {
             val bgr = Mat()
             Imgproc.cvtColor(result, bgr, Imgproc.COLOR_GRAY2BGR)
             result.release()
             return bgr
         }
+        return result
+    }
+
+    // Оттенки серого — просто grayscale + лёгкий CLAHE
+    private fun enhanceGray(input: Mat): Mat {
+        if (input.empty()) return input.clone()
+
+        val gray = Mat()
+        if (input.channels() == 3) {
+            Imgproc.cvtColor(input, gray, Imgproc.COLOR_BGR2GRAY)
+        } else {
+            input.copyTo(gray)
+        }
+
+        val clahe = Imgproc.createCLAHE(1.5, Size(8.0, 8.0))
+        val result = Mat()
+        clahe.apply(gray, result)
+
+        clahe.clear()
+        gray.release()
+        return result  // вернёт grayscale, конвертнём в BGR в enhanceScan
+    }
+
+    // Фото — авто-баланс белого + мягкое усиление контраста
+    private fun enhancePhoto(input: Mat): Mat {
+        if (input.empty()) return input.clone()
+
+        // 1. Авто-баланс белого по методу "gray world"
+        val mean = Core.mean(input)
+        val grayValue = (mean.`val`[0] + mean.`val`[1] + mean.`val`[2]) / 3.0
+
+        val balanced = Mat()
+        val channels = mutableListOf<Mat>()
+        Core.split(input, channels)
+
+        // Ограничиваем коэффициенты, чтобы тёмный канал не вытянул шум
+        val scales = doubleArrayOf(
+            if (mean.`val`[0] > 1.0) (grayValue / mean.`val`[0]).coerceIn(0.5, 2.0) else 1.0,
+            if (mean.`val`[1] > 1.0) (grayValue / mean.`val`[1]).coerceIn(0.5, 2.0) else 1.0,
+            if (mean.`val`[2] > 1.0) (grayValue / mean.`val`[2]).coerceIn(0.5, 2.0) else 1.0
+        )
+        for (i in 0..2) {
+            channels[i].convertTo(channels[i], -1, scales[i], 0.0)
+        }
+        Core.merge(channels, balanced)
+        channels.forEach { it.release() }
+
+        // 2. Мягкое усиление контраста через CLAHE на L-канале
+        val lab = Mat()
+        Imgproc.cvtColor(balanced, lab, Imgproc.COLOR_BGR2Lab)
+        balanced.release()
+
+        val labChannels = mutableListOf<Mat>()
+        Core.split(lab, labChannels)
+        val clahe = Imgproc.createCLAHE(1.8, Size(8.0, 8.0))
+        clahe.apply(labChannels[0], labChannels[0])
+        clahe.clear()
+
+        val merged = Mat()
+        Core.merge(labChannels, merged)
+        labChannels.forEach { it.release() }
+        lab.release()
+
+        val result = Mat()
+        Imgproc.cvtColor(merged, result, Imgproc.COLOR_Lab2BGR)
+        merged.release()
+
         return result
     }
 
@@ -808,32 +895,247 @@ object DocumentDetector {
             input.copyTo(gray)
         }
 
-        // Адаптивная бинаризация Sauvola или adaptiveThreshold
-        val result = Mat()
+        // ← ШАГ 1: Median blur ДО бинаризации — убираем шум бумаги
+        val denoised = Mat()
+        Imgproc.medianBlur(gray, denoised, 3)
+        gray.release()
+
+        // ← ШАГ 2: адаптивный blockSize в зависимости от размера изображения
+        val minSide = min(denoised.cols(), denoised.rows())
+        var blockSize = (minSide / 40).coerceIn(15, 41)
+        if (blockSize % 2 == 0) blockSize += 1  // должен быть нечётным
+
+        // Адаптивная бинаризация
+        val binary = Mat()
         Imgproc.adaptiveThreshold(
-            gray,
-            result,
+            denoised,
+            binary,
             255.0,
             Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C,
             Imgproc.THRESH_BINARY,
-            15,
+            blockSize,        // ← было 15
             5.0
         )
+        denoised.release()
+
+        // ← ШАГ 1: Median blur ПОСЛЕ бинаризации — убираем одиночные чёрные точки
+        val result = Mat()
+        Imgproc.medianBlur(binary, result, 3)
+        binary.release()
 
         // Проверяем, не слишком ли белый результат
         val whiteRatio = Core.countNonZero(result).toDouble() / (result.rows() * result.cols())
         if (whiteRatio > 0.98) {
             // Почти всё белое — возвращаем grayscale с усилением контраста
-            val enhancedGray = Mat()
-            Core.normalize(gray, enhancedGray, 0.0, 255.0, Core.NORM_MINMAX)
-            gray.release()
-            return enhancedGray
+            val fallbackGray = Mat()
+            if (input.channels() == 3) {
+                Imgproc.cvtColor(input, fallbackGray, Imgproc.COLOR_BGR2GRAY)
+            } else {
+                input.copyTo(fallbackGray)
+            }
+            val enhanced = Mat()
+            Core.normalize(fallbackGray, enhanced, 0.0, 255.0, Core.NORM_MINMAX)
+            fallbackGray.release()
+            result.release()
+            return enhanced
         }
 
-        gray.release()
         return result
     }
 
+    /**
+     * Sauvola binarization.
+     * T = mean * (1 + k * (std / R - 1))
+     * k = 0.2..0.5, R = 128
+     */
+    private fun enhanceBwSauvola(input: Mat, k: Double = 0.34, R: Double = 128.0): Mat {
+        if (input.empty()) return input.clone()
+
+        val gray = Mat()
+        if (input.channels() == 3) {
+            Imgproc.cvtColor(input, gray, Imgproc.COLOR_BGR2GRAY)
+        } else {
+            input.copyTo(gray)
+        }
+
+        // Median blur до бинаризации (шаг 1)
+        val denoised = Mat()
+        Imgproc.medianBlur(gray, denoised, 3)
+        gray.release()
+
+        // Адаптивный размер окна
+        val minSide = min(denoised.cols(), denoised.rows())
+        var window = (minSide / 40).coerceIn(15, 41)
+        if (window % 2 == 0) window += 1
+
+        // Приводим к float — для точности вычислений
+        val grayF = Mat()
+        denoised.convertTo(grayF, CvType.CV_32F)
+        denoised.release()
+
+        // mean = boxFilter(grayF)
+        val mean = Mat()
+        Imgproc.boxFilter(grayF, mean, CvType.CV_32F, Size(window.toDouble(), window.toDouble()))
+
+        // sqMean = boxFilter(grayF * grayF)
+        val graySq = Mat()
+        Core.multiply(grayF, grayF, graySq)
+        val sqMean = Mat()
+        Imgproc.boxFilter(graySq, sqMean, CvType.CV_32F, Size(window.toDouble(), window.toDouble()))
+        graySq.release()
+
+        // variance = sqMean - mean^2
+        val meanSq = Mat()
+        Core.multiply(mean, mean, meanSq)
+        val variance = Mat()
+        Core.subtract(sqMean, meanSq, variance)
+        meanSq.release()
+        sqMean.release()
+
+        // std = sqrt(max(variance, 0))
+        val zero = Mat(variance.size(), variance.type(), Scalar(0.0))
+        val varClamped = Mat()
+        Core.max(variance, zero, varClamped)
+        variance.release()
+        zero.release()
+
+        val std = Mat()
+        Core.sqrt(varClamped, std)
+        varClamped.release()
+
+        // threshold = mean * (1 + k * (std / R - 1))
+        val stdOverR = Mat()
+        Core.divide(std, Scalar(R), stdOverR)
+        std.release()
+
+        val oneMinus = Mat()  // (std/R - 1)
+        Core.subtract(stdOverR, Scalar(1.0), oneMinus)
+        stdOverR.release()
+
+        val kTimes = Mat()
+        Core.multiply(oneMinus, Scalar(k), kTimes)
+        oneMinus.release()
+
+        val onePlus = Mat()
+        Core.add(kTimes, Scalar(1.0), onePlus)
+        kTimes.release()
+
+        val threshold = Mat()
+        Core.multiply(mean, onePlus, threshold)
+        mean.release()
+        onePlus.release()
+
+        // Бинаризация: grayF > threshold ? 255 : 0
+        val mask = Mat()
+        Core.compare(grayF, threshold, mask, Core.CMP_GT)
+        grayF.release()
+        threshold.release()
+
+        // mask — 8U с 0/255
+        val result = Mat()
+        mask.convertTo(result, CvType.CV_8U, 255.0)
+        mask.release()
+
+        // Median blur после бинаризации (шаг 1)
+        val cleaned = Mat()
+        Imgproc.medianBlur(result, cleaned, 3)
+        result.release()
+
+        // Fallback: если почти всё белое — возвращаем нормализованный grayscale
+        val whiteRatio = Core.countNonZero(cleaned).toDouble() / (cleaned.rows() * cleaned.cols())
+        if (whiteRatio > 0.98) {
+            val fallbackGray = Mat()
+            if (input.channels() == 3) {
+                Imgproc.cvtColor(input, fallbackGray, Imgproc.COLOR_BGR2GRAY)
+            } else {
+                input.copyTo(fallbackGray)
+            }
+            val enhanced = Mat()
+            Core.normalize(fallbackGray, enhanced, 0.0, 255.0, Core.NORM_MINMAX)
+            fallbackGray.release()
+            cleaned.release()
+            return enhanced
+        }
+
+        return cleaned
+    }
+
+    /**
+     * Автовыбор между Sauvola и Adaptive Gaussian.
+     * Sauvola даёт лучший результат на тонком тексте,
+     * но на жирном — инвертирует (белые буквы на чёрном).
+     * Здесь мы пробуем Sauvola, проверяем результат по whiteRatio
+     * и откатываемся на Adaptive Gaussian, если Sauvola "сломалась".
+     */
+    private fun enhanceBwAuto(input: Mat): Mat {
+        if (input.empty()) return input.clone()
+
+        val grayForMean = Mat()
+        if (input.channels() == 3) {
+            Imgproc.cvtColor(input, grayForMean, Imgproc.COLOR_BGR2GRAY)
+        } else {
+            input.copyTo(grayForMean)
+        }
+        val inputMean = Core.mean(grayForMean).`val`[0]
+
+        // ← Считаем долю тёмных пикселей (ниже 80)
+        val darkMask = Mat()
+        Imgproc.threshold(grayForMean, darkMask, 80.0, 255.0, Imgproc.THRESH_BINARY_INV)
+        val darkRatio = Core.countNonZero(darkMask).toDouble() /
+                (darkMask.rows() * darkMask.cols())
+        darkMask.release()
+        grayForMean.release()
+
+        Log.d(TAG, "Input mean = $inputMean, darkRatio = $darkRatio")
+
+        val workingInput: Mat
+        var preInverted = false
+
+        // ← Тёмный источник: либо очень низкое среднее, либо большинство пикселей тёмные
+        if (inputMean < 140.0 || darkRatio > 0.55) {
+            workingInput = Mat()
+            Core.bitwise_not(input, workingInput)
+            preInverted = true
+            Log.d(TAG, "Dark input detected, pre-inverting")
+        } else {
+            workingInput = input
+        }
+
+        try {
+            val sauvolaResult = try {
+                enhanceBwSauvola(workingInput)
+            } catch (e: Exception) {
+                Log.e(TAG, "Sauvola failed: ${e.message}")
+                null
+            }
+
+            if (sauvolaResult != null) {
+                var whiteRatio = Core.countNonZero(sauvolaResult).toDouble() /
+                        (sauvolaResult.rows() * sauvolaResult.cols())
+                Log.d(TAG, "Sauvola whiteRatio = $whiteRatio")
+
+                if (whiteRatio < 0.5) {
+                    Core.bitwise_not(sauvolaResult, sauvolaResult)
+                    whiteRatio = Core.countNonZero(sauvolaResult).toDouble() /
+                            (sauvolaResult.rows() * sauvolaResult.cols())
+                    Log.d(TAG, "After flip whiteRatio = $whiteRatio")
+                }
+
+                if (whiteRatio in 0.60..0.97) {
+                    return sauvolaResult
+                }
+
+                Log.d(TAG, "Sauvola ratio out of range, falling back to Adaptive")
+                sauvolaResult.release()
+            }
+
+            return enhanceBw(workingInput)
+        } finally {
+            if (preInverted) {
+                workingInput.release()
+            }
+        }
+    }
     private fun enhanceColor(input: Mat): Mat {
         if (input.empty()) return input.clone()
 
@@ -867,11 +1169,31 @@ object DocumentDetector {
     private fun enhanceSharp(input: Mat): Mat {
         if (input.empty()) return input.clone()
 
+        // 1. Сначала лёгкий CLAHE для контраста текста
+        val lab = Mat()
+        Imgproc.cvtColor(input, lab, Imgproc.COLOR_BGR2Lab)
+        val channels = mutableListOf<Mat>()
+        Core.split(lab, channels)
+        val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
+        clahe.apply(channels[0], channels[0])
+        val merged = Mat()
+        Core.merge(channels, merged)
+        channels.forEach { it.release() }
+        lab.release()
+        clahe.clear()
+
+        val contrastEnhanced = Mat()
+        Imgproc.cvtColor(merged, contrastEnhanced, Imgproc.COLOR_Lab2BGR)
+        merged.release()
+
+        // 2. Unsharp mask с меньшим радиусом — не даёт "ореолов" вокруг текста
         val blurred = Mat()
-        Imgproc.GaussianBlur(input, blurred, Size(0.0, 0.0), 3.0)
+        Imgproc.GaussianBlur(contrastEnhanced, blurred, Size(0.0, 0.0), 1.5)
         val result = Mat()
-        Core.addWeighted(input, 1.5, blurred, -0.5, 0.0, result)
+        Core.addWeighted(contrastEnhanced, 1.6, blurred, -0.6, 0.0, result)
+
         blurred.release()
+        contrastEnhanced.release()
         return result
     }
 

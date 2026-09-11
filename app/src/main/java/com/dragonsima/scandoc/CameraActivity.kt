@@ -160,7 +160,6 @@ class CameraActivity : AppCompatActivity() {
         baseMat?.release()
         filterCache.values.forEach { it.release() }
         filterCache.clear()
-        DocumentDetector.release()
     }
 
     // ==================== Инициализация UI ====================
@@ -532,6 +531,7 @@ class CameraActivity : AppCompatActivity() {
         resultImageView.visibility = View.GONE
         actionsLayout.visibility = View.GONE
         retakeButton.visibility = View.GONE
+        findViewById<View>(R.id.filterPanel).visibility = View.GONE
         cropButton.visibility = View.GONE
         saveResultButton.visibility = View.GONE
         hdrButton.visibility = View.VISIBLE
@@ -963,20 +963,23 @@ class CameraActivity : AppCompatActivity() {
             val mat = Mat()
             Utils.bitmapToMat(bitmap, mat)
             // Получаем сырое выпрямленное изображение (если ML Kit уже выпрямил – можно пропустить)
-            val rawMat = getRawDocumentMat(mat, null) ?: mat // или просто mat
-            // Сохраняем в файл (если нужно) и вызываем onDocumentCaptured
-            val rawFile = File(cacheDir, "mlkit_raw_${System.currentTimeMillis()}.jpg")
-            if (Imgcodecs.imwrite(rawFile.absolutePath, rawMat)) {
-                originalImagePath.set(rawFile.absolutePath)
-                runOnUiThread {
-                    onDocumentCaptured(rawMat)
-                    progressBar.visibility = View.GONE
+            val rawMat = getRawDocumentMat(mat, null)
+            if (rawMat == null) {
+                // используем mat как есть
+                val rawFile = File(cacheDir, "mlkit_raw_${System.currentTimeMillis()}.jpg")
+                if (Imgcodecs.imwrite(rawFile.absolutePath, mat)) {
+                    originalImagePath.set(rawFile.absolutePath)
+                    runOnUiThread { onDocumentCaptured(mat); progressBar.visibility = View.GONE }
                 }
             } else {
-                rawMat.release()
-                runOnUiThread {
-                    progressBar.visibility = View.GONE
-                    Toast.makeText(this, "Ошибка сохранения", Toast.LENGTH_SHORT).show()
+                // rawMat — новый Mat, mat больше не нужен
+                mat.release()
+                val rawFile = File(cacheDir, "mlkit_raw_${System.currentTimeMillis()}.jpg")
+                if (Imgcodecs.imwrite(rawFile.absolutePath, rawMat)) {
+                    originalImagePath.set(rawFile.absolutePath)
+                    runOnUiThread { onDocumentCaptured(rawMat); progressBar.visibility = View.GONE }
+                } else {
+                    rawMat.release()
                 }
             }
             bitmap.recycle()
@@ -1002,6 +1005,7 @@ class CameraActivity : AppCompatActivity() {
     }
 
     private fun onDocumentCaptured(warped: Mat) {
+        baseMat?.release()
         baseMat = warped.clone()
         warped.release()
         currentFilter = "color"
@@ -1013,25 +1017,28 @@ class CameraActivity : AppCompatActivity() {
     }
 
     private fun applyFilter(filter: String) {
-        val mat = baseMat ?: return  // локальная копия, безопасно используем
+        val mat = baseMat ?: return
 
-        val resultMat = when (filter) {
-            "original" -> mat.clone()
-            else -> {
-                filterCache[filter]?.clone() ?: run {
-                    val enhanced = when (filter) {
-                        "bw" -> DocumentDetector.enhanceScan(mat, "bw")
-                        "color" -> DocumentDetector.enhanceScan(mat, "color")
-                        "sharp" -> DocumentDetector.enhanceScan(mat, "sharp")
-                        else -> mat.clone()
-                    }
-                    filterCache[filter] = enhanced
-                    enhanced.clone()
-                }
+        val resultMat: Mat
+        var shouldRelease = false
+
+        if (filter == "original") {
+            // всегда создаём клон — его нужно освободить после конвертации
+            resultMat = mat.clone()
+            shouldRelease = true
+        } else {
+            // берём из кеша или создаём и кешируем
+            resultMat = filterCache[filter] ?: DocumentDetector.enhanceScan(mat, filter).also {
+                filterCache[filter] = it
             }
+            // кешированный Mat освобождать НЕЛЬЗЯ — он ещё пригодится
         }
 
         val bitmap = matToBitmap(resultMat)
+        if (shouldRelease) {
+            resultMat.release()
+        }
+
         runOnUiThread {
             findViewById<ImageView>(R.id.resultImageView).setImageBitmap(bitmap)
         }
@@ -1047,16 +1054,22 @@ class CameraActivity : AppCompatActivity() {
 
     private fun setupFilterButtons() {
         findViewById<View>(R.id.filterOriginal).setOnClickListener { applyFilter("original") }
+        findViewById<View>(R.id.filterPhoto).setOnClickListener { applyFilter("photo") }
         findViewById<View>(R.id.filterColor).setOnClickListener { applyFilter("color") }
+        findViewById<View>(R.id.filterGray).setOnClickListener { applyFilter("gray") }
         findViewById<View>(R.id.filterBW).setOnClickListener { applyFilter("bw") }
+        findViewById<View>(R.id.filterShadow).setOnClickListener { applyFilter("shadow") }
         findViewById<View>(R.id.filterSharp).setOnClickListener { applyFilter("sharp") }
     }
 
     private fun updateFilterButtonStates(activeFilter: String) {
         val buttonMap = mapOf(
             R.id.filterOriginal to "original",
+            R.id.filterPhoto to "photo",
             R.id.filterColor to "color",
+            R.id.filterGray to "gray",
             R.id.filterBW to "bw",
+            R.id.filterShadow to "shadow",
             R.id.filterSharp to "sharp"
         )
 
@@ -1069,13 +1082,20 @@ class CameraActivity : AppCompatActivity() {
     }
 
     private fun showResultUI(show: Boolean) {
-        val visibility = if (show) View.VISIBLE else View.GONE
-        findViewById<View>(R.id.filterPanel).visibility = visibility
-        findViewById<View>(R.id.actionsLayout).visibility = visibility
-        findViewById<View>(R.id.captureButton).visibility = if (show) View.GONE else View.VISIBLE
-        findViewById<View>(R.id.resultImageView).visibility = visibility
-        findViewById<View>(R.id.previewView).visibility = if (show) View.GONE else View.VISIBLE
-        findViewById<View>(R.id.overlayView).visibility = if (show) View.GONE else View.VISIBLE
+        val v = if (show) View.VISIBLE else View.GONE
+        val g = if (show) View.GONE else View.VISIBLE
+
+        findViewById<View>(R.id.filterPanel).visibility = v
+        findViewById<View>(R.id.actionsLayout).visibility = v
+        retakeButton.visibility = v
+        cropButton.visibility = v
+        saveResultButton.visibility = v
+        hdrButton.visibility = g      // ← тоже спрятать
+        aiButton.visibility = g       // ← тоже спрятать
+        captureButton.visibility = g
+        resultImageView.visibility = v
+        previewView.visibility = g
+        overlay.visibility = g
     }
 
     private fun releaseResources() {
