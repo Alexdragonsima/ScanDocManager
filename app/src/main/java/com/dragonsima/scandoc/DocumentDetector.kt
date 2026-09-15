@@ -729,7 +729,8 @@ object DocumentDetector {
         var background: Mat? = null
         var diff: Mat? = null
         var blackhat: Mat? = null
-        var kernel: Mat? = null
+        var closeKernel: Mat? = null
+        var blackhatKernel: Mat? = null
         var clahe: CLAHE? = null
 
         return try {
@@ -738,24 +739,24 @@ object DocumentDetector {
 
             val lChannel = channels[0]
 
-            // Адаптивный размер ядра ~1/20 от короткой стороны
-            val ksize = (min(image.cols(), image.rows()) / 20).coerceIn(15, 61)
-            val kernelSize = if (ksize % 2 == 0) ksize + 1 else ksize
-
-            // Оценка фона (тени + неравномерное освещение)
+            // === ШАГ 4: Фон через Closing (убирает буквы, сохраняет границы теней) ===
+            val fontKernelSize = (min(image.cols(), image.rows()) / 25).coerceIn(15, 51)
+            closeKernel = Imgproc.getStructuringElement(
+                Imgproc.MORPH_ELLIPSE,
+                Size(fontKernelSize.toDouble(), fontKernelSize.toDouble())
+            )
             background = Mat()
-            Imgproc.GaussianBlur(lChannel, background,
-                Size(kernelSize.toDouble(), kernelSize.toDouble()), 0.0)
+            Imgproc.morphologyEx(lChannel, background, Imgproc.MORPH_CLOSE, closeKernel)
 
-            // Вычитание фона → выравнивание освещения
+            // Деление вместо вычитания — правильнее для мультипликативных теней
             diff = Mat()
-            Core.subtract(lChannel, background, diff)
-            Core.add(diff, Scalar(128.0), diff)
+            Core.divide(lChannel, background, diff, 255.0)
+            // === конец шага 4 ===
 
             // Убираем заломы: black-hat находит тонкие тёмные линии
-            kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(9.0, 9.0))
+            blackhatKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(9.0, 9.0))
             blackhat = Mat()
-            Imgproc.morphologyEx(diff, blackhat, Imgproc.MORPH_BLACKHAT, kernel)
+            Imgproc.morphologyEx(diff, blackhat, Imgproc.MORPH_BLACKHAT, blackhatKernel)
 
             // Ослабляем заломы
             Core.subtract(diff, blackhat, diff)
@@ -765,7 +766,7 @@ object DocumentDetector {
             clahe = Imgproc.createCLAHE(2.5, Size(8.0, 8.0))
             clahe.apply(diff, diff)
 
-            // Нормализация — избегаем "серого"
+            // Нормализация
             Core.normalize(diff, diff, 0.0, 255.0, Core.NORM_MINMAX)
 
             // Копируем результат в L-канал
@@ -781,7 +782,8 @@ object DocumentDetector {
         } finally {
             background?.release()
             blackhat?.release()
-            kernel?.release()
+            closeKernel?.release()
+            blackhatKernel?.release()
             clahe?.clear()
             diff?.release()
             if (channels.size >= 3) {

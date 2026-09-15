@@ -14,6 +14,11 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.min
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import com.google.mlkit.vision.text.Text
+import org.opencv.core.MatOfInt
 
 /**
  * Управляет сохранением сканов в PDF и временными файлами.
@@ -87,10 +92,120 @@ object FileManager {
     }
 
     /**
-     * Сохраняет несколько изображений (в виде JPEG-байтов) в многостраничный PDF.
-     * @param pages список ByteArray, каждый элемент — JPEG-изображение страницы.
+     * Сохраняет изображение в PDF формате A4 с невидимым текстовым слоем.
+     * Текст из ML Kit позиционируется точно по координатам boundingBox,
+     * что позволяет PDF-ридерам искать, выделять и копировать его.
      */
-    fun saveBatchToPdf(context: Context, pages: List<ByteArray>): File {
+    fun saveToPdfWithText(context: Context, image: Mat, visionText: Text?): File {
+        require(!image.empty()) { "Mat пустой" }
+
+        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        val pdfFile = File(context.filesDir, "$DOCUMENTS_FOLDER/$timestamp.pdf")
+
+        val bitmap = matToBitmap(image)
+        try {
+            val pdfDocument = PdfDocument()
+            val pageWidth = 595
+            val pageHeight = 842
+            val pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, 1).create()
+            val page = pdfDocument.startPage(pageInfo)
+            val canvas = page.canvas
+
+            // Та же трансформация, что и в saveToPdf — общая для картинки и текста
+            val scale = min(pageWidth.toFloat() / bitmap.width, pageHeight.toFloat() / bitmap.height)
+            val scaledWidth = (bitmap.width * scale).toInt()
+            val scaledHeight = (bitmap.height * scale).toInt()
+            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, scaledWidth, scaledHeight, true)
+            val x = (pageWidth - scaledWidth) / 2f
+            val y = (pageHeight - scaledHeight) / 2f
+
+            canvas.drawBitmap(scaledBitmap, x, y, null)
+
+            // Невидимый текстовый слой поверх картинки
+            if (visionText != null) {
+                drawInvisibleText(
+                    canvas = canvas,
+                    visionText = visionText,
+                    scale = scale,
+                    offsetX = x,
+                    offsetY = y
+                )
+            }
+
+            pdfDocument.finishPage(page)
+
+            FileOutputStream(pdfFile).use { pdfDocument.writeTo(it) }
+            pdfDocument.close()
+
+            // Миниатюра — как в обычном saveToPdf
+            saveThumbnail(context, bitmap, timestamp)
+            scaledBitmap.recycle()
+        } catch (e: Exception) {
+            Log.e(TAG, "Ошибка при сохранении PDF с текстом", e)
+            pdfFile.delete()
+            throw e
+        } finally {
+            bitmap.recycle()
+        }
+
+        Log.d(TAG, "PDF с текстовым слоем сохранён: ${pdfFile.absolutePath}")
+        return pdfFile
+    }
+
+    /**
+     * Рисует невидимый текстовый слой.
+     * alpha=1 — текст физически присутствует в PDF, но визуально невидим.
+     * Поиск и выделение в ридерах при этом работают.
+     *
+     * Координаты boundingBox приходят в пикселях bitmap, поэтому
+     * применяем ту же трансформацию (scale + offset), что и к изображению.
+     */
+    private fun drawInvisibleText(
+        canvas: Canvas,
+        visionText: Text,
+        scale: Float,
+        offsetX: Float,
+        offsetY: Float
+    ) {
+        val paint = Paint().apply {
+            color = Color.BLACK
+            alpha = 1                 // почти прозрачно — не видно глазу, но парсится
+            isAntiAlias = true
+            isSubpixelText = true     // точное позиционирование
+        }
+
+        for (block in visionText.textBlocks) {
+            for (line in block.lines) {
+                val box = line.boundingBox ?: continue
+                val text = line.text
+                if (text.isBlank()) continue
+                if (box.width() <= 0 || box.height() <= 0) continue
+
+                // Координаты в системе PDF-страницы
+                val pageX = offsetX + box.left * scale
+                val pageY = offsetY + box.top * scale
+                val pageW = box.width() * scale
+                val pageH = box.height() * scale
+
+                // Подбираем textSize так, чтобы строка вписалась в ширину бокса
+                paint.textSize = pageH * 0.9f
+                val measured = paint.measureText(text)
+                if (measured > 0f && pageW > 0f) {
+                    paint.textSize *= (pageW / measured)
+                }
+
+                // Базовая линия: низ бокса минус небольшой отступ
+                val baseline = pageY + pageH * 0.85f
+                canvas.drawText(text, pageX, baseline, paint)
+            }
+        }
+    }
+
+    /**
+     * Сохраняет список страниц в многостраничный PDF A4 с невидимым текстовым слоем.
+     * Если страница выгружена на диск — подгружает Mat из файла на время обработки.
+     */
+    fun saveBatchToPdfWithText(context: Context, pages: List<ScannedPage>): File {
         require(pages.isNotEmpty()) { "Список страниц пуст" }
 
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
@@ -98,38 +213,34 @@ object FileManager {
 
         val pdfDocument = PdfDocument()
         try {
-            pages.forEachIndexed { index, pageBytes ->
-                val bitmap = BitmapFactory.decodeByteArray(pageBytes, 0, pageBytes.size)
-                    ?: throw IllegalArgumentException("Невозможно декодировать страницу ${index + 1}")
+            pages.forEachIndexed { index, page ->
+                // Получаем Mat: из памяти или с диска
+                val localMat: Mat
+                val needsRelease: Boolean
+                if (page.mat != null) {
+                    localMat = page.mat
+                    needsRelease = false
+                } else if (page.filePath != null) {
+                    localMat = Imgcodecs.imread(page.filePath)
+                    if (localMat.empty()) {
+                        Log.w(TAG, "Страница ${index + 1} не загрузилась, пропуск")
+                        return@forEachIndexed
+                    }
+                    needsRelease = true
+                } else {
+                    Log.w(TAG, "Страница ${index + 1} без данных, пропуск")
+                    return@forEachIndexed
+                }
 
                 try {
-                    val pageWidth = 595
-                    val pageHeight = 842
-                    val pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, index + 1).create()
-                    val page = pdfDocument.startPage(pageInfo)
-                    val canvas = page.canvas
-
-                    val scale = min(pageWidth.toFloat() / bitmap.width, pageHeight.toFloat() / bitmap.height)
-                    val scaledBitmap = Bitmap.createScaledBitmap(
-                        bitmap,
-                        (bitmap.width * scale).toInt(),
-                        (bitmap.height * scale).toInt(),
-                        true
-                    )
-
-                    val x = (pageWidth - scaledBitmap.width) / 2f
-                    val y = (pageHeight - scaledBitmap.height) / 2f
-                    canvas.drawBitmap(scaledBitmap, x, y, null)
-
-                    pdfDocument.finishPage(page)
-                    scaledBitmap.recycle()
+                    renderPage(pdfDocument, localMat, page.visionText, index + 1)
                 } finally {
-                    bitmap.recycle()
+                    if (needsRelease) localMat.release()
                 }
             }
 
             FileOutputStream(pdfFile).use { pdfDocument.writeTo(it) }
-            Log.d(TAG, "Многостраничный PDF сохранён: ${pdfFile.absolutePath}")
+            Log.d(TAG, "Многостраничный PDF сохранён: ${pdfFile.absolutePath}, страниц: ${pages.size}")
         } catch (e: Exception) {
             Log.e(TAG, "Ошибка при сохранении многостраничного PDF", e)
             pdfFile.delete()
@@ -138,21 +249,52 @@ object FileManager {
             pdfDocument.close()
         }
 
-        // Сохраняем миниатюру первой страницы
-        val firstPageBitmap = BitmapFactory.decodeByteArray(pages[0], 0, pages[0].size)
-        if (firstPageBitmap != null) {
-            try {
-                saveThumbnail(context, firstPageBitmap, "batch_$timestamp")
-            } finally {
-                firstPageBitmap.recycle()
-            }
-        } else {
-            Log.w(TAG, "Не удалось создать миниатюру для первой страницы")
+        // Миниатюра — по первой странице
+        val firstPage = pages.firstOrNull()
+        val firstThumb = firstPage?.thumbnail
+        if (firstThumb != null && !firstThumb.isRecycled) {
+            saveThumbnail(context, firstThumb, "batch_$timestamp")
         }
 
         return pdfFile
     }
 
+    /**
+     * Рендерит одну страницу в PDF: изображение + невидимый текстовый слой.
+     */
+    private fun renderPage(
+        pdfDocument: PdfDocument,
+        image: Mat,
+        visionText: com.google.mlkit.vision.text.Text?,
+        pageNumber: Int
+    ) {
+        val pageWidth = 595
+        val pageHeight = 842
+        val pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create()
+        val page = pdfDocument.startPage(pageInfo)
+        val canvas = page.canvas
+
+        val bitmap = matToBitmap(image)
+        try {
+            val scale = min(pageWidth.toFloat() / bitmap.width, pageHeight.toFloat() / bitmap.height)
+            val scaledWidth = (bitmap.width * scale).toInt()
+            val scaledHeight = (bitmap.height * scale).toInt()
+            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, scaledWidth, scaledHeight, true)
+            val x = (pageWidth - scaledWidth) / 2f
+            val y = (pageHeight - scaledHeight) / 2f
+
+            canvas.drawBitmap(scaledBitmap, x, y, null)
+            scaledBitmap.recycle()
+
+            if (visionText != null) {
+                drawInvisibleText(canvas, visionText, scale, x, y)
+            }
+
+            pdfDocument.finishPage(page)
+        } finally {
+            bitmap.recycle()
+        }
+    }
     /**
      * Конвертирует Mat в Bitmap.
      * Освобождает промежуточный Mat, если он был создан.
@@ -234,5 +376,84 @@ object FileManager {
         } finally {
             scaled.recycle()
         }
+    }
+    /**
+     * Сохраняет Mat в JPEG. Возвращает файл.
+     */
+    fun saveToJpg(context: Context, image: Mat): File {
+        require(!image.empty()) { "Mat пустой" }
+
+        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        val jpgFile = File(context.filesDir, "$DOCUMENTS_FOLDER/$timestamp.jpg")
+
+        val params = MatOfInt(Imgcodecs.IMWRITE_JPEG_QUALITY, 92)
+        val success = try {
+            Imgcodecs.imwrite(jpgFile.absolutePath, image, params)
+        } finally {
+            params.release()
+        }
+
+        // Миниатюра — как у PDF
+        val bitmap = matToBitmap(image)
+        try {
+            saveThumbnail(context, bitmap, timestamp)
+        } finally {
+            bitmap.recycle()
+        }
+
+        Log.d(TAG, "JPEG сохранён: ${jpgFile.absolutePath}")
+        return jpgFile
+    }
+
+    /**
+     * Сохраняет список страниц в папку Documents/jpg_<timestamp>/ как отдельные JPEG.
+     * Возвращает папку.
+     */
+    fun saveBatchToJpg(context: Context, pages: List<ScannedPage>): File {
+        require(pages.isNotEmpty()) { "Список страниц пуст" }
+
+        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        val folder = File(context.filesDir, "$DOCUMENTS_FOLDER/jpg_$timestamp")
+        if (!folder.exists() && !folder.mkdirs()) {
+            throw IllegalStateException("Не удалось создать папку для JPG")
+        }
+
+        pages.forEachIndexed { index, page ->
+            // Получаем Mat — из памяти или с диска
+            val localMat: Mat
+            val needsRelease: Boolean
+            if (page.mat != null) {
+                localMat = page.mat
+                needsRelease = false
+            } else if (page.filePath != null) {
+                localMat = Imgcodecs.imread(page.filePath)
+                if (localMat.empty()) {
+                    Log.w(TAG, "Страница ${index + 1} не загрузилась")
+                    return@forEachIndexed
+                }
+                needsRelease = true
+            } else return@forEachIndexed
+
+            try {
+                val file = File(folder, "page_${(index + 1).toString().padStart(2, '0')}.jpg")
+                val params = MatOfInt(Imgcodecs.IMWRITE_JPEG_QUALITY, 92)
+                try {
+                    Imgcodecs.imwrite(file.absolutePath, localMat, params)
+                } finally {
+                    params.release()
+                }
+            } finally {
+                if (needsRelease) localMat.release()
+            }
+        }
+
+        // Миниатюра — по первой странице
+        val firstThumb = pages.firstOrNull()?.thumbnail
+        if (firstThumb != null && !firstThumb.isRecycled) {
+            saveThumbnail(context, firstThumb, "jpg_$timestamp")
+        }
+
+        Log.d(TAG, "Пакет JPG сохранён: ${folder.absolutePath}, файлов: ${pages.size}")
+        return folder
     }
 }

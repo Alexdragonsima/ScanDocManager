@@ -25,6 +25,7 @@
                 android:layout_height="48dp"
                 android:text="☰"
                 android:textSize="24sp"
+                android:textColor="?android:attr/textColorPrimary"
                 android:gravity="center"/>
 
             <TextView
@@ -32,12 +33,14 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="ScanDoc"
+                android:textColor="?android:attr/textColorPrimary"
                 android:textSize="20sp"
                 android:textStyle="bold"
                 android:gravity="center"/>
 
             <TextView
                 android:id="@+id/statusText"
+                android:textColor="?android:attr/textColorSecondary"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text=""
@@ -69,6 +72,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Нет документов"
+                    android:textColor="?android:attr/textColorPrimary"
                     android:textSize="20sp"
                     android:textStyle="bold"
                     android:layout_marginTop="16dp"/>
@@ -101,6 +105,22 @@
             android:text="📷 Сканировать документ"
             android:textSize="18sp"
             app:cornerRadius="24dp"/>
+
+        <!-- Многостраничный скан (вторичная кнопка) -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/multiScanButton"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="8dp"
+            android:text="📚  Многостраничный скан"
+            android:textColor="@color/primary_color"
+            android:textSize="14sp"
+            app:cornerRadius="20dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:stateListAnimator="@null" />
     </LinearLayout>
 
     <!-- Навигационное меню -->

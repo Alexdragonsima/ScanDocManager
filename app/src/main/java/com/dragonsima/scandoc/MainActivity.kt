@@ -86,7 +86,23 @@ class MainActivity : AppCompatActivity() {
     private fun setupListeners() {
         binding.captureButton.setOnClickListener {
             if (opencvLoaded) {
-                cameraLauncher.launch(Intent(this, CameraActivity::class.java))
+                val intent = Intent(this, CameraActivity::class.java).apply {
+                    putExtra("multiPageMode", false)
+                }
+                cameraLauncher.launch(intent)
+            } else {
+                Toast.makeText(this, "OpenCV недоступен", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        binding.multiScanButton.setOnClickListener {
+            if (opencvLoaded) {
+                // Очищаем репозиторий перед новой сессией — на всякий случай
+                PageRepository.clear()
+                val intent = Intent(this, CameraActivity::class.java).apply {
+                    putExtra("multiPageMode", true)
+                }
+                cameraLauncher.launch(intent)
             } else {
                 Toast.makeText(this, "OpenCV недоступен", Toast.LENGTH_SHORT).show()
             }

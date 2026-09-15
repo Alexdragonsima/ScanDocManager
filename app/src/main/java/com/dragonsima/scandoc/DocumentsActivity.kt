@@ -1,10 +1,7 @@
 package com.dragonsima.scandoc
 
-import android.content.Intent
 import android.graphics.Color
-import android.net.Uri
 import android.os.Bundle
-import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -14,7 +11,6 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -208,38 +204,12 @@ class DocumentsActivity : AppCompatActivity() {
     }
 
     private fun openPdf(file: File) {
-        if (!file.exists()) {
-            Toast.makeText(this, "Файл не найден", Toast.LENGTH_SHORT).show()
-            return
-        }
-        try {
-            val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", file)
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/pdf")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            startActivity(intent)
-        } catch (e: Exception) {
-            Toast.makeText(this, "Нет программы для просмотра PDF", Toast.LENGTH_SHORT).show()
-        }
+        DocumentActions.openPdf(this, file)
     }
 
+
     private fun sharePdf(file: File) {
-        if (!file.exists()) {
-            Toast.makeText(this, "Файл не найден", Toast.LENGTH_SHORT).show()
-            return
-        }
-        try {
-            val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", file)
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "application/pdf"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            startActivity(Intent.createChooser(intent, "Поделиться"))
-        } catch (e: Exception) {
-            Toast.makeText(this, "Ошибка при попытке поделиться", Toast.LENGTH_SHORT).show()
-        }
+        DocumentActions.sharePdf(this, file)
     }
 
     private fun renameFile(file: File) {

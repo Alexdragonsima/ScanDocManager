@@ -21,7 +21,7 @@
         android:layout_height="match_parent"
         android:visibility="gone"
         android:scaleType="fitCenter"
-        android:background="@color/white" />
+        android:background="@color/surface" />
 
     <ProgressBar
         android:id="@+id/progressBar"
@@ -99,6 +99,23 @@
             app:cornerRadius="18dp" />
 
     </LinearLayout>
+    <!-- Счётчик страниц (только в мультирежиме) -->
+    <TextView
+        android:id="@+id/pageCounterText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="64dp"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:background="#CC000000"
+        android:textColor="@color/white"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:text="Стр. 1"
+        android:visibility="gone" />
 
     <!-- Кнопка съёмки -->
     <com.google.android.material.button.MaterialButton
@@ -343,6 +360,7 @@
                     android:padding="0dp" />
 
                 <TextView
+                    android:id="@+id/retakeLabel"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Переснять"
@@ -388,6 +406,42 @@
                     android:maxLines="1" />
             </LinearLayout>
 
+            <!-- Кнопка Текст (OCR) -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="top|center_horizontal"
+                android:layout_marginEnd="8dp">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/ocrButton"
+                    android:layout_width="56dp"
+                    android:layout_height="56dp"
+                    android:text="📋"
+                    android:textSize="22sp"
+                    android:textColor="@color/white"
+                    android:contentDescription="Распознать текст"
+                    app:backgroundTint="@color/primary_color"
+                    app:cornerRadius="28dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:stateListAnimator="@null"
+                    android:minWidth="56dp"
+                    android:minHeight="56dp"
+                    android:padding="0dp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Текст"
+                    android:textSize="11sp"
+                    android:textColor="@color/text_secondary"
+                    android:layout_marginTop="6dp"
+                    android:maxLines="1" />
+            </LinearLayout>
+
             <!-- Сохранить -->
             <LinearLayout
                 android:layout_width="0dp"
@@ -414,6 +468,7 @@
                     android:padding="0dp" />
 
                 <TextView
+                    android:id="@+id/saveLabel"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Сохранить"

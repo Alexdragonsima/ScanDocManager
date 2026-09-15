@@ -22,12 +22,17 @@ import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.activity.OnBackPressedCallback
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.GoogleApiAvailability
 import com.google.android.material.button.MaterialButton
+import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.TextRecognizer
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -48,6 +53,12 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
 import kotlin.time.Duration.Companion.milliseconds
 import org.opencv.core.Mat
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.ScrollView
+import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 class CameraActivity : AppCompatActivity() {
 
     // ==================== UI ====================
@@ -56,6 +67,8 @@ class CameraActivity : AppCompatActivity() {
     private lateinit var captureButton: Button
     private lateinit var retakeButton: Button
     private lateinit var cropButton: Button
+    private lateinit var retakeLabel: android.widget.TextView
+    private lateinit var saveLabel: android.widget.TextView
     private lateinit var saveResultButton: Button
     private lateinit var actionsLayout: View
     private lateinit var resultImageView: ImageView
@@ -72,10 +85,16 @@ class CameraActivity : AppCompatActivity() {
     private var currentFilter: String = "color"
     private val filterCache = mutableMapOf<String, Mat>()
 
+    private var multiPageMode = false
+    private lateinit var pageCounterText: android.widget.TextView
+
     private lateinit var cameraProvider: ProcessCameraProvider
     private var baseMat: Mat? = null
     private var imageCapture: ImageCapture? = null
     private var camera: Camera? = null
+    private var pendingBackAction = false
+
+    private var textRecognizer: TextRecognizer? = null
 
     private val analysisExecutor = Executors.newSingleThreadExecutor()
     private val processingExecutor = Executors.newSingleThreadExecutor()
@@ -86,6 +105,7 @@ class CameraActivity : AppCompatActivity() {
     private val lastDetectedCorners = AtomicReference<Array<Point>?>(null)
     private val lastImageWidth = AtomicLong(0)
     private val lastImageHeight = AtomicLong(0)
+    private val lastRecognizedText = AtomicReference<com.google.mlkit.vision.text.Text?>(null)
 
     private val originalImagePath = AtomicReference<String?>(null)
     private val processedImagePath = AtomicReference<String?>(null)
@@ -142,9 +162,14 @@ class CameraActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_camera)
+        multiPageMode = intent.getBooleanExtra("multiPageMode", false)
         setupFilterButtons()
         initViews()
         setupButtons()
+        if(multiPageMode){
+            setupMultiPageUI()
+        }
+        setupBackHandler()
         if (hasCameraPermission()) startCamera()
         else requestPermissionLauncher.launch(android.Manifest.permission.CAMERA)
     }
@@ -160,6 +185,7 @@ class CameraActivity : AppCompatActivity() {
         baseMat?.release()
         filterCache.values.forEach { it.release() }
         filterCache.clear()
+        if (!multiPageMode) PageRepository.clear()
     }
 
     // ==================== Инициализация UI ====================
@@ -168,7 +194,10 @@ class CameraActivity : AppCompatActivity() {
         overlay = findViewById(R.id.overlayView)
         resultImageView = findViewById(R.id.resultImageView)
         captureButton = findViewById(R.id.captureButton)
+        pageCounterText = findViewById(R.id.pageCounterText)
         retakeButton = findViewById(R.id.retakeButton)
+        retakeLabel = findViewById(R.id.retakeLabel)
+        saveLabel = findViewById(R.id.saveLabel)
         cropButton = findViewById(R.id.cropButton)
         saveResultButton = findViewById(R.id.saveResultButton)
         actionsLayout = findViewById(R.id.actionsLayout)
@@ -187,10 +216,71 @@ class CameraActivity : AppCompatActivity() {
     }
 
     private fun setupButtons() {
-        backButton.setOnClickListener { finish() }
-        saveResultButton.setOnClickListener { saveDocument() }
-        retakeButton.setOnClickListener { retakePicture() }
+        backButton.setOnClickListener {
+            onBackPressedDispatcher.onBackPressed()
+        }
+        saveResultButton.setOnClickListener {
+            if (multiPageMode) finishMultiPageSession() else saveDocument()
+        }
+        saveResultButton.setOnLongClickListener {
+            showFormatDialog()
+            true
+        }
+        retakeButton.setOnClickListener {
+            if (multiPageMode) addCurrentPageToRepository() else retakePicture()
+        }
+
+        retakeButton.setOnLongClickListener {
+            if (multiPageMode) {
+                androidx.appcompat.app.AlertDialog.Builder(this@CameraActivity)
+                    .setTitle("Переснять снимок?")
+                    .setMessage("Текущая страница будет отброшена без сохранения.")
+                    .setPositiveButton("Переснять") { _, _ ->
+                        // Просто возвращаемся к камере без сохранения
+                        returnToCameraAfterPageAdded()
+                    }
+                    .setNegativeButton("Отмена", null)
+                    .show()
+                true
+            } else false
+        }
         cropButton.setOnClickListener { cropDocument() }
+        cropButton.setOnLongClickListener {
+            showRotateDialog()
+            true
+        }
+
+        findViewById<View>(R.id.ocrButton).setOnClickListener {
+            val mat = baseMat ?: run {
+                Toast.makeText(this, "Нет изображения", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            progressBar.visibility = View.VISIBLE
+
+            processingExecutor.execute {
+                val bitmap = matToBitmap(mat)
+                val image = InputImage.fromBitmap(bitmap, 0)
+                getTextRecognizer().process(image)
+                    .addOnSuccessListener { visionText ->
+                        lastRecognizedText.set(visionText)
+                        runOnUiThread {
+                            progressBar.visibility = View.GONE
+                            if (visionText.text.isNotBlank()) {
+                                showRecognizedTextDialog(visionText.text)
+                            } else {
+                                Toast.makeText(this, "Текст не распознан", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                    .addOnFailureListener { e ->
+                        Log.e(TAG, "OCR failed", e)
+                        runOnUiThread {
+                            progressBar.visibility = View.GONE
+                            Toast.makeText(this, "Ошибка OCR: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+            }
+        }
 
         hdrButton.setOnClickListener {
             hdrEnabled = !hdrEnabled
@@ -214,6 +304,306 @@ class CameraActivity : AppCompatActivity() {
         updateHdrButtonState()
     }
 
+    private fun setupBackHandler() {
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+
+                // 1. Обычный режим — просто закрываем
+                if (!multiPageMode) {
+                    finish()
+                    return
+                }
+
+                // 2. Мультирежим + есть активный снимок (мы на превью) —
+                //    спрашиваем "Отменить снимок?"
+                val hasActiveShot = baseMat != null
+                if (hasActiveShot) {
+                    androidx.appcompat.app.AlertDialog.Builder(this@CameraActivity)
+                        .setTitle("Отменить снимок?")
+                        .setMessage("Текущий снимок не будет добавлен.")
+                        .setPositiveButton("Отменить снимок") { _, _ ->
+                            returnToCameraAfterPageAdded()
+                        }
+                        .setNegativeButton("Остаться", null)
+                        .show()
+                    return
+                }
+
+                // 3. Мультирежим + накоплены страницы — стандартный диалог
+                if (PageRepository.getCount() > 0 && !pendingBackAction) {
+                    pendingBackAction = true
+                    androidx.appcompat.app.AlertDialog.Builder(this@CameraActivity)
+                        .setTitle("Завершить без сохранения?")
+                        .setMessage("Накоплено страниц: ${PageRepository.getCount()}.")
+                        .setPositiveButton("Сохранить") { _, _ ->
+                            pendingBackAction = false
+                            finishMultiPageSession()
+                        }
+                        .setNeutralButton("Выйти без сохранения") { _, _ ->
+                            pendingBackAction = false
+                            PageRepository.clear()
+                            finish()
+                        }
+                        .setNegativeButton("Отмена") { _, _ ->
+                            pendingBackAction = false
+                        }
+                        .setOnCancelListener {
+                            pendingBackAction = false
+                        }
+                        .show()
+                } else {
+                    // 4. Мультирежим, ничего не накоплено — просто выходим
+                    PageRepository.clear()
+                    finish()
+                }
+            }
+        })
+    }
+
+    private fun showFormatDialog() {
+        val options = arrayOf(
+            "📄 Сохранить как PDF",
+            "🖼 Сохранить как JPG"
+        )
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Формат сохранения")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> {
+                        if (multiPageMode) finishMultiPageSession() else saveDocument()
+                    }
+                    1 -> {
+                        if (multiPageMode) finishMultiPageAsJpg() else saveDocumentAsJpg()
+                    }
+                }
+            }
+            .setNegativeButton("Отмена", null)
+            .show()
+    }
+    private fun saveDocumentAsJpg() {
+        val mat = baseMat ?: run {
+            Toast.makeText(this, "Нет изображения", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val finalMat = filterCache[currentFilter] ?: mat
+        if (finalMat.empty()) {
+            Toast.makeText(this, "Изображение пустое", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        progressBar.visibility = View.VISIBLE
+        saveResultButton.isEnabled = false
+
+        saveExecutor.execute {
+            val matToSave = finalMat.clone()
+            try {
+                val jpgFile = FileManager.saveToJpg(this, matToSave)
+                val resultIntent = Intent().apply {
+                    putExtra("savedPdfPath", jpgFile.absolutePath)
+                    putExtra("savedPdfName", jpgFile.name)
+                }
+                runOnUiThread {
+                    progressBar.visibility = View.GONE
+                    saveResultButton.isEnabled = true
+                    setResult(RESULT_OK, resultIntent)
+                    androidx.appcompat.app.AlertDialog.Builder(this)
+                        .setTitle("✅ JPG сохранён")
+                        .setMessage(jpgFile.name)
+                        .setPositiveButton("Открыть") { _, _ ->
+                            DocumentActions.openImage(this, jpgFile)
+                            finish()
+                        }
+                        .setNeutralButton("Поделиться") { _, _ ->
+                            DocumentActions.shareImage(this, jpgFile)
+                            finish()
+                        }
+                        .setNegativeButton("Готово") { _, _ -> finish() }
+                        .setCancelable(false)
+                        .show()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "saveDocumentAsJpg error", e)
+                runOnUiThread {
+                    progressBar.visibility = View.GONE
+                    saveResultButton.isEnabled = true
+                    Toast.makeText(this, "Ошибка: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                matToSave.release()
+            }
+        }
+    }
+    private fun finishMultiPageAsJpg() {
+        // Добавляем текущую страницу, если она есть
+        val mat = baseMat
+        if (mat != null) {
+            val filtered = filterCache[currentFilter] ?: mat
+            if (!filtered.empty()) {
+                val thumbBitmap = matToBitmap(filtered)
+                val scaledThumb = Bitmap.createScaledBitmap(thumbBitmap, 200, 260, true)
+                thumbBitmap.recycle()
+                try {
+                    PageRepository.addPage(
+                        context = this,
+                        mat = filtered,
+                        visionText = lastRecognizedText.get(),
+                        thumbnail = scaledThumb
+                    )
+                } catch (e: Exception) {
+                    Log.e(TAG, "finishMultiPageAsJpg: addPage error", e)
+                    if (!scaledThumb.isRecycled) scaledThumb.recycle()
+                }
+            }
+        }
+
+        val pages = PageRepository.getAll()
+        if (pages.isEmpty()) {
+            Toast.makeText(this, "Нет страниц для сохранения", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        progressBar.visibility = View.VISIBLE
+        saveResultButton.isEnabled = false
+
+        saveExecutor.execute {
+            try {
+                val folder = FileManager.saveBatchToJpg(this, pages)
+                val files = folder.listFiles()?.sortedBy { it.name } ?: emptyList()
+
+                val resultIntent = Intent().apply {
+                    putExtra("savedPdfPath", folder.absolutePath)
+                    putExtra("savedPdfName", folder.name)
+                }
+                PageRepository.clear()
+
+                runOnUiThread {
+                    progressBar.visibility = View.GONE
+                    saveResultButton.isEnabled = true
+                    setResult(RESULT_OK, resultIntent)
+                    androidx.appcompat.app.AlertDialog.Builder(this)
+                        .setTitle("✅ Сохранено страниц: ${files.size}")
+                        .setMessage(folder.name)
+                        .setPositiveButton("Открыть первую") { _, _ ->
+                            files.firstOrNull()?.let { DocumentActions.openImage(this, it) }
+                            finish()
+                        }
+                        .setNeutralButton("Поделиться всеми") { _, _ ->
+                            DocumentActions.shareImages(this, files)
+                            finish()
+                        }
+                        .setNegativeButton("Готово") { _, _ -> finish() }
+                        .setCancelable(false)
+                        .show()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "finishMultiPageAsJpg error", e)
+                runOnUiThread {
+                    progressBar.visibility = View.GONE
+                    saveResultButton.isEnabled = true
+                    Toast.makeText(this, "Ошибка: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+    private fun setupMultiPageUI() {
+        // Меняем иконки
+        saveResultButton.text = "✅"
+        retakeButton.text = "➕"
+
+        // Меняем подписи
+        retakeLabel.text = "Добавить"
+        saveLabel.text = "Готово"
+
+        pageCounterText.setOnClickListener {
+            showPageListSheet()
+        }
+        Toast.makeText(
+            this,
+            "Короткий тап — добавить.\nДолгий — переснять.\nДолгое на «Обрезать» — повернуть.",
+            Toast.LENGTH_LONG
+        ).show()
+
+        updatePageCounter()
+    }
+
+    private fun showPageListSheet() {
+        val pages = PageRepository.getAll()
+        val hasCurrent = baseMat != null
+
+        if (pages.isEmpty() && !hasCurrent) {
+            Toast.makeText(this, "Пока нет страниц", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+
+        val sheetView = layoutInflater.inflate(R.layout.activity_page_list, null)
+
+        val sheetDialog = com.google.android.material.bottomsheet.BottomSheetDialog(this)
+        sheetDialog.setContentView(sheetView)
+
+        val recyclerView = sheetView.findViewById<androidx.recyclerview.widget.RecyclerView>(R.id.pagesRecyclerView)
+        val title = sheetView.findViewById<android.widget.TextView>(R.id.pagesTitle)
+
+        title.text = if (hasCurrent) {
+            "Готово: ${pages.size}  ·  +1 не добавлена"
+        } else {
+            "Страницы (${pages.size})"
+        }
+
+        val adapter = PageThumbnailAdapter(
+            onPageClick = { position ->
+                Toast.makeText(this, "Страница ${position + 1}", Toast.LENGTH_SHORT).show()
+            },
+            onPageLongClick = { position ->
+                androidx.appcompat.app.AlertDialog.Builder(this)
+                    .setTitle("Удалить страницу ${position + 1}?")
+                    .setPositiveButton("Удалить") { _, _ ->
+                        PageRepository.removeAt(position)
+                        sheetDialog.dismiss()
+                        updatePageCounter()
+                        if (PageRepository.getCount() > 0) showPageListSheet()
+                    }
+                    .setNegativeButton("Отмена", null)
+                    .show()
+            }
+        )
+
+        recyclerView.layoutManager =
+            androidx.recyclerview.widget.LinearLayoutManager(this, androidx.recyclerview.widget.LinearLayoutManager.HORIZONTAL, false)
+        recyclerView.adapter = adapter
+        adapter.submitPages(pages)
+
+        sheetView.findViewById<View>(R.id.closeButton).setOnClickListener {
+            sheetDialog.dismiss()
+        }
+        sheetView.findViewById<View>(R.id.cancelButton).setOnClickListener {
+            sheetDialog.dismiss()
+        }
+        sheetView.findViewById<View>(R.id.finishButton).setOnClickListener {
+            sheetDialog.dismiss()
+            finishMultiPageSession()
+        }
+
+        sheetDialog.show()
+    }
+
+    private fun updatePageCounter() {
+        if (!multiPageMode) {
+            pageCounterText.visibility = View.GONE
+            return
+        }
+
+        val done = PageRepository.getCount()
+        val hasCurrent = baseMat != null
+
+        pageCounterText.text = if (hasCurrent) {
+            "📄 Готово: $done  ·  Снимаем стр. ${done + 1}"
+        } else {
+            "📄 Готово: $done  ·  Готов к съёмке"
+        }
+        pageCounterText.visibility = View.VISIBLE
+    }
+
     private fun updateHdrButtonState() {
         if (hdrEnabled) {
             hdrButton.text = "HDR: ВКЛ"
@@ -227,6 +617,30 @@ class CameraActivity : AppCompatActivity() {
     // ==================== Утилиты ====================
     private fun isMlKitAvailable(): Boolean {
         return GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(this) == ConnectionResult.SUCCESS
+    }
+
+    private fun getTextRecognizer(): TextRecognizer{
+        if (textRecognizer == null){
+            textRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        }
+        return textRecognizer!!
+    }
+
+    private fun recognizeTextFromMat(mat: Mat, onResult: (String) -> Unit) {
+        // Конвертируем Mat в Bitmap (у нас уже есть matToBitmap)
+        val bitmap = matToBitmap(mat)
+        val image = InputImage.fromBitmap(bitmap, 0) // rotationDegrees = 0, т.к. Mat уже выпрямлен
+
+        getTextRecognizer().process(image)
+            .addOnSuccessListener { visionText ->
+                // visionText.text содержит весь распознанный текст
+                val fullText = visionText.text
+                onResult(fullText)
+            }
+            .addOnFailureListener { e ->
+                Log.e(TAG, "OCR failed", e)
+                onResult("")
+            }
     }
 
     private fun hasCameraPermission(): Boolean {
@@ -524,6 +938,7 @@ class CameraActivity : AppCompatActivity() {
         lastDetectedCorners.set(null)
         lastImageWidth.set(0)
         lastImageHeight.set(0)
+        lastRecognizedText.set(null)
 
         previewView.visibility = View.VISIBLE
         overlay.visibility = View.VISIBLE
@@ -556,7 +971,14 @@ class CameraActivity : AppCompatActivity() {
         saveExecutor.execute {
             val matToSave = finalMat.clone()
             try {
-                val pdfFile = FileManager.saveToPdf(this, matToSave)
+                val visionText = lastRecognizedText.get()
+                val pdfFile = if (visionText != null) {
+                    // С текстовым слоем — поиск и выделение работают
+                    FileManager.saveToPdfWithText(this, matToSave, visionText)
+                } else {
+                    // Без OCR — обычный PDF с картинкой
+                    FileManager.saveToPdf(this, matToSave)
+                }
                 val resultIntent = Intent().apply {
                     putExtra("savedPdfPath", pdfFile.absolutePath)
                     putExtra("savedPdfName", pdfFile.name)
@@ -565,8 +987,9 @@ class CameraActivity : AppCompatActivity() {
                     progressBar.visibility = View.GONE
                     saveResultButton.isEnabled = true
                     setResult(RESULT_OK, resultIntent)
-                    Toast.makeText(this, "✅ Сохранено: ${pdfFile.name}", Toast.LENGTH_LONG).show()
-                    finish()
+                    DocumentActions.showSavedDialog(this, pdfFile) {
+                        finish()
+                    }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Save error", e)
@@ -577,6 +1000,143 @@ class CameraActivity : AppCompatActivity() {
                 }
             } finally {
                 matToSave.release()
+            }
+        }
+    }
+
+    /**
+     * Мультирежим: добавляет текущую страницу в репозиторий и возвращает к камере.
+     */
+    private fun addCurrentPageToRepository() {
+        val mat = baseMat ?: run {
+            Toast.makeText(this, "Нет изображения", Toast.LENGTH_SHORT).show()
+            return
+        }
+        // Берём отфильтрованную версию, если фильтр применён
+        val filtered = filterCache[currentFilter] ?: mat
+        if (filtered.empty()) {
+            Toast.makeText(this, "Изображение пустое", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        // Делаем thumbnail для UI (позже, если понадобится экран списка страниц)
+        val thumbBitmap = matToBitmap(filtered)
+        val scaledThumb = Bitmap.createScaledBitmap(
+            thumbBitmap,
+            200, 260, true
+        )
+        thumbBitmap.recycle()
+
+        try {
+            PageRepository.addPage(
+                context = this,
+                mat = filtered,
+                visionText = lastRecognizedText.get(),
+                thumbnail = scaledThumb
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "addCurrentPageToRepository error", e)
+            if (!scaledThumb.isRecycled) scaledThumb.recycle()
+            Toast.makeText(this, "Ошибка добавления страницы", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        Toast.makeText(this, "Страница добавлена (${PageRepository.getCount()})", Toast.LENGTH_SHORT).show()
+
+        // Возвращаемся в режим камеры
+        returnToCameraAfterPageAdded()
+    }
+
+    /**
+     * Сбрасывает текущее состояние и показывает превью камеры для следующей страницы.
+     */
+    private fun returnToCameraAfterPageAdded() {
+        // Освобождаем текущий baseMat и кэш
+        baseMat?.release()
+        baseMat = null
+        filterCache.values.forEach { it.release() }
+        filterCache.clear()
+        lastRecognizedText.set(null)
+
+        deleteFileIfExists(originalImagePath.get())
+        originalImagePath.set(null)
+
+        // UI обратно к камере
+        previewView.visibility = View.VISIBLE
+        overlay.visibility = View.VISIBLE
+        captureButton.visibility = View.VISIBLE
+        resultImageView.visibility = View.GONE
+        findViewById<View>(R.id.filterPanel).visibility = View.GONE
+        actionsLayout.visibility = View.GONE
+        retakeButton.visibility = View.GONE
+        cropButton.visibility = View.GONE
+        saveResultButton.visibility = View.GONE
+        hdrButton.visibility = View.VISIBLE
+        aiButton.visibility = View.VISIBLE
+
+        analysisPaused.set(false)
+
+        // ← Обновляем счётчик, НЕ скрываем
+        updatePageCounter()
+    }
+    /**
+     * Мультирежим: собирает все страницы в PDF и завершает работу.
+     */
+    private fun finishMultiPageSession() {
+        // Добавляем текущую страницу, если её ещё нет в репозитории
+        val mat = baseMat
+        if (mat != null) {
+            val filtered = filterCache[currentFilter] ?: mat
+            if (!filtered.empty()) {
+                val thumbBitmap = matToBitmap(filtered)
+                val scaledThumb = Bitmap.createScaledBitmap(thumbBitmap, 200, 260, true)
+                thumbBitmap.recycle()
+                try {
+                    PageRepository.addPage(
+                        context = this,
+                        mat = filtered,
+                        visionText = lastRecognizedText.get(),
+                        thumbnail = scaledThumb
+                    )
+                } catch (e: Exception) {
+                    Log.e(TAG, "finishMultiPageSession: addPage error", e)
+                    if (!scaledThumb.isRecycled) scaledThumb.recycle()
+                }
+            }
+        }
+
+        val pages = PageRepository.getAll()
+        if (pages.isEmpty()) {
+            Toast.makeText(this, "Нет страниц для сохранения", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        progressBar.visibility = View.VISIBLE
+        saveResultButton.isEnabled = false
+
+        saveExecutor.execute {
+            try {
+                val pdfFile = FileManager.saveBatchToPdfWithText(this, pages)
+                val resultIntent = Intent().apply {
+                    putExtra("savedPdfPath", pdfFile.absolutePath)
+                    putExtra("savedPdfName", pdfFile.name)
+                }
+                PageRepository.clear()
+                runOnUiThread {
+                    progressBar.visibility = View.GONE
+                    saveResultButton.isEnabled = true
+                    setResult(RESULT_OK, resultIntent)
+                    DocumentActions.showSavedDialog(this, pdfFile, pages.size) {
+                        finish()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "finishMultiPageSession error", e)
+                runOnUiThread {
+                    progressBar.visibility = View.GONE
+                    saveResultButton.isEnabled = true
+                    Toast.makeText(this, "Ошибка: ${e.message}", Toast.LENGTH_LONG).show()
+                }
             }
         }
     }
@@ -1014,6 +1574,7 @@ class CameraActivity : AppCompatActivity() {
         filterCache.clear()
         applyFilter(currentFilter)
         showResultUI(true)
+        updatePageCounter()
     }
 
     private fun applyFilter(filter: String) {
@@ -1050,6 +1611,114 @@ class CameraActivity : AppCompatActivity() {
         val bmp = Bitmap.createBitmap(mat.cols(), mat.rows(), Bitmap.Config.ARGB_8888)
         org.opencv.android.Utils.matToBitmap(mat, bmp)
         return bmp
+    }
+
+    /**
+     * Поворачивает Mat на заданный угол: 90, 180, 270.
+     * Возвращает НОВЫЙ Mat — исходный не освобождается.
+     */
+    private fun rotateMat(source: Mat, degrees: Int): Mat {
+        val rotated = Mat()
+        when (degrees % 360) {
+            90 -> Core.rotate(source, rotated, Core.ROTATE_90_CLOCKWISE)
+            180 -> Core.rotate(source, rotated, Core.ROTATE_180)
+            270 -> Core.rotate(source, rotated, Core.ROTATE_90_COUNTERCLOCKWISE)
+            else -> source.copyTo(rotated)
+        }
+        return rotated
+    }
+
+    /**
+     * Поворачивает текущий baseMat и пересчитывает кэш фильтров.
+     */
+    private fun rotateCurrentImage(degrees: Int) {
+        val mat = baseMat ?: run {
+            Toast.makeText(this, "Нет изображения", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        // Поворачиваем baseMat
+        val rotated = rotateMat(mat, degrees)
+
+        // Освобождаем старый baseMat и заменяем
+        mat.release()
+        baseMat = rotated
+
+        // Кэш фильтров больше не валиден — пересчитываем
+        filterCache.values.forEach { it.release() }
+        filterCache.clear()
+
+        // Пересчитываем текущий фильтр
+        applyFilter(currentFilter)
+
+        Toast.makeText(this, "Повёрнуто на $degrees°", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showRotateDialog() {
+        val options = arrayOf(
+            "↺  Повернуть влево (90°)",
+            "↻  Повернуть вправо (90°)",
+            "⟳  Повернуть на 180°"
+        )
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Повернуть изображение")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> rotateCurrentImage(270)  // влево = против часовой = 270° по часовой
+                    1 -> rotateCurrentImage(90)
+                    2 -> rotateCurrentImage(180)
+                }
+            }
+            .setNegativeButton("Отмена", null)
+            .show()
+    }
+
+    private fun copyTextToClipboard(text: String) {
+        if (text.isBlank()) {
+            Toast.makeText(this, "Текст не распознан", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = ClipData.newPlainText("Распознанный текст", text)
+        clipboard.setPrimaryClip(clip)
+        Toast.makeText(this, "Текст скопирован в буфер", Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * Показывает распознанный текст в диалоге с возможностью прокрутки,
+     * выделения и копирования. Текст selectable — можно выделить часть пальцем.
+     */
+    private fun showRecognizedTextDialog(text: String) {
+        val density = resources.displayMetrics.density
+        val padding = (16 * density).toInt()
+        val maxHeight = (400 * density).toInt()
+
+        // Скролл + TextView
+        val textView = TextView(this).apply {
+            this.text = text
+            textSize = 14f
+            setTextIsSelectable(true)         // позволяет выделять и копировать часть
+            setPadding(padding, padding, padding, padding)
+        }
+
+        val scrollView = ScrollView(this).apply {
+            addView(textView)
+            layoutParams = android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                maxHeight
+            )
+        }
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Распознанный текст")
+            .setView(scrollView)
+            .setPositiveButton("Копировать всё") { _, _ ->
+                copyTextToClipboard(text)
+            }
+            .setNegativeButton("Закрыть", null)
+            .create()
+
+        dialog.show()
     }
 
     private fun setupFilterButtons() {
@@ -1096,6 +1765,10 @@ class CameraActivity : AppCompatActivity() {
         resultImageView.visibility = v
         previewView.visibility = g
         overlay.visibility = g
+
+        if (multiPageMode) {
+            updatePageCounter()
+        }
     }
 
     private fun releaseResources() {
