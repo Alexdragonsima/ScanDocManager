@@ -60,6 +60,11 @@
         <activity
             android:name=".CameraActivity"
             android:theme="@style/Theme.ScanDoc" />
+
+        <activity
+            android:name=".OcrResultActivity"
+            android:exported="false"
+            android:label="Распознанный текст" />
     </application>
 
 </manifest>

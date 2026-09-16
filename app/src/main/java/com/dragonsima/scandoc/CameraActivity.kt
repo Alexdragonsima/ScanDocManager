@@ -266,7 +266,7 @@ class CameraActivity : AppCompatActivity() {
                         runOnUiThread {
                             progressBar.visibility = View.GONE
                             if (visionText.text.isNotBlank()) {
-                                showRecognizedTextDialog(visionText.text)
+                                startActivity(OcrResultActivity.createIntent(this, visionText.text))
                             } else {
                                 Toast.makeText(this, "Текст не распознан", Toast.LENGTH_SHORT).show()
                             }
@@ -552,7 +552,8 @@ class CameraActivity : AppCompatActivity() {
 
         val adapter = PageThumbnailAdapter(
             onPageClick = { position ->
-                Toast.makeText(this, "Страница ${position + 1}", Toast.LENGTH_SHORT).show()
+                sheetDialog.dismiss()
+                showFullPageViewer(position)
             },
             onPageLongClick = { position ->
                 androidx.appcompat.app.AlertDialog.Builder(this)
@@ -585,6 +586,78 @@ class CameraActivity : AppCompatActivity() {
         }
 
         sheetDialog.show()
+    }
+
+    /**
+     * Открывает полноэкранный просмотр страницы.
+     */
+    private fun showFullPageViewer(startPosition: Int) {
+        val pages = PageRepository.getAll()
+        if (pages.isEmpty() || startPosition !in pages.indices) return
+
+        val view = layoutInflater.inflate(R.layout.dialog_page_viewer, null)
+        val dialog = android.app.Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        dialog.setContentView(view)
+
+        val imageView = view.findViewById<android.widget.ImageView>(R.id.fullImageView)
+        val indicator = view.findViewById<android.widget.TextView>(R.id.pageIndicator)
+        val prevBtn = view.findViewById<android.view.View>(R.id.prevButton)
+        val nextBtn = view.findViewById<android.view.View>(R.id.nextButton)
+        val deleteBtn = view.findViewById<android.view.View>(R.id.deletePageButton)
+
+        var currentIndex = startPosition
+
+        fun render() {
+            val list = PageRepository.getAll()
+            if (currentIndex !in list.indices) {
+                dialog.dismiss()
+                return
+            }
+            val page = list[currentIndex]
+            imageView.setImageBitmap(page.thumbnail)
+            indicator.text = "${currentIndex + 1} / ${list.size}"
+
+            prevBtn.isEnabled = currentIndex > 0
+            nextBtn.isEnabled = currentIndex < list.size - 1
+            prevBtn.alpha = if (prevBtn.isEnabled) 1f else 0.4f
+            nextBtn.alpha = if (nextBtn.isEnabled) 1f else 0.4f
+        }
+
+        prevBtn.setOnClickListener {
+            if (currentIndex > 0) {
+                currentIndex--
+                render()
+            }
+        }
+        nextBtn.setOnClickListener {
+            if (currentIndex < PageRepository.getCount() - 1) {
+                currentIndex++
+                render()
+            }
+        }
+        deleteBtn.setOnClickListener {
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Удалить страницу ${currentIndex + 1}?")
+                .setPositiveButton("Удалить") { _, _ ->
+                    PageRepository.removeAt(currentIndex)
+                    val remaining = PageRepository.getCount()
+                    if (remaining == 0) {
+                        dialog.dismiss()
+                    } else {
+                        if (currentIndex >= remaining) currentIndex = remaining - 1
+                        render()
+                    }
+                    updatePageCounter()
+                }
+                .setNegativeButton("Отмена", null)
+                .show()
+        }
+
+        // Тап по фону — закрыть
+        view.setOnClickListener { dialog.dismiss() }
+
+        dialog.show()
+        render()
     }
 
     private fun updatePageCounter() {
@@ -1671,54 +1744,6 @@ class CameraActivity : AppCompatActivity() {
             }
             .setNegativeButton("Отмена", null)
             .show()
-    }
-
-    private fun copyTextToClipboard(text: String) {
-        if (text.isBlank()) {
-            Toast.makeText(this, "Текст не распознан", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        val clip = ClipData.newPlainText("Распознанный текст", text)
-        clipboard.setPrimaryClip(clip)
-        Toast.makeText(this, "Текст скопирован в буфер", Toast.LENGTH_SHORT).show()
-    }
-
-    /**
-     * Показывает распознанный текст в диалоге с возможностью прокрутки,
-     * выделения и копирования. Текст selectable — можно выделить часть пальцем.
-     */
-    private fun showRecognizedTextDialog(text: String) {
-        val density = resources.displayMetrics.density
-        val padding = (16 * density).toInt()
-        val maxHeight = (400 * density).toInt()
-
-        // Скролл + TextView
-        val textView = TextView(this).apply {
-            this.text = text
-            textSize = 14f
-            setTextIsSelectable(true)         // позволяет выделять и копировать часть
-            setPadding(padding, padding, padding, padding)
-        }
-
-        val scrollView = ScrollView(this).apply {
-            addView(textView)
-            layoutParams = android.view.ViewGroup.LayoutParams(
-                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                maxHeight
-            )
-        }
-
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Распознанный текст")
-            .setView(scrollView)
-            .setPositiveButton("Копировать всё") { _, _ ->
-                copyTextToClipboard(text)
-            }
-            .setNegativeButton("Закрыть", null)
-            .create()
-
-        dialog.show()
     }
 
     private fun setupFilterButtons() {
