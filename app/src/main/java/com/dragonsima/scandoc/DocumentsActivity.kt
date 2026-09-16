@@ -22,6 +22,7 @@ import com.dragonsima.scandoc.databinding.ItemDocumentBinding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -33,7 +34,10 @@ class DocumentsActivity : AppCompatActivity() {
     private lateinit var adapter: DocumentAdapter
 
     private val documents = mutableListOf<File>()
+    private lateinit var searchInput: android.widget.EditText
+    private val allDocuments = mutableListOf<File>()      // полный список
     private var sortByName = false
+    private var searchJob: kotlinx.coroutines.Job? = null
 
     // Диалог увеличенной миниатюры
     private var enlargedDialog: android.app.Dialog? = null
@@ -42,6 +46,7 @@ class DocumentsActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityDocumentsBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        searchInput = findViewById(R.id.searchInput)
 
         sortByName = savedInstanceState?.getBoolean("sortByName", false) ?: false
 
@@ -109,6 +114,13 @@ class DocumentsActivity : AppCompatActivity() {
                 }
                 .show()
         }
+        searchInput.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                applyFilter(s?.toString().orEmpty())
+            }
+        })
     }
 
     private fun loadDocuments() {
@@ -120,8 +132,42 @@ class DocumentsActivity : AppCompatActivity() {
                 } else emptyList()
             }
 
+            allDocuments.clear()
+            allDocuments.addAll(files)
+
+            // Применяем текущий фильтр (если есть)
+            applyFilter(searchInput.text?.toString().orEmpty())
+        }
+    }
+
+    /**
+     * Фильтрует список по запросу. Использует индексы текстов для поиска.
+     */
+    private fun applyFilter(query: String) {
+        // Отменяем предыдущий поиск (если пользователь быстро печатает)
+        searchJob?.cancel()
+
+        searchJob = lifecycleScope.launch {
+            val trimmed = query.trim()
+
+            // Дебаунс: ждём 300мс, если пользователь продолжает печатать — отмена
+            delay(300)
+
+            val result: List<File> = if (trimmed.isBlank()) {
+                allDocuments.toList()
+            } else {
+                withContext(Dispatchers.IO) {
+                    val matches = FileManager.searchInIndices(this@DocumentsActivity, trimmed)
+                    allDocuments.filter { it.name in matches.keys }
+                        .sortedByDescending { matches[it.name] ?: 0 }
+                }
+            }
+
+            // Проверяем, что активити жива и пользователь не отменил
+            if (isFinishing || isDestroyed) return@launch
+
             documents.clear()
-            documents.addAll(files)
+            documents.addAll(result)
             sortDocuments()
             updateEmptyState()
         }
@@ -138,8 +184,16 @@ class DocumentsActivity : AppCompatActivity() {
 
     private fun updateEmptyState() {
         val isEmpty = documents.isEmpty()
+        val hasQuery = searchInput.text?.toString()?.isNotBlank() == true
+
         binding.emptyState.visibility = if (isEmpty) View.VISIBLE else View.GONE
         binding.documentsRecyclerView.visibility = if (isEmpty) View.GONE else View.VISIBLE
+
+        binding.emptyState.text = if (isEmpty && hasQuery) {
+            "Ничего не найдено"
+        } else {
+            "Нет документов"
+        }
     }
 
     private fun showDocumentMenu(file: File) {
@@ -256,6 +310,12 @@ class DocumentsActivity : AppCompatActivity() {
                             if (oldThumb.exists()) {
                                 oldThumb.renameTo(newThumb)
                             }
+                            // Переименовываем индекс
+                            FileManager.renameIndexForPdf(
+                                this@DocumentsActivity,
+                                file.name,
+                                newFile.name
+                            )
                             true
                         } else {
                             false
@@ -282,6 +342,10 @@ class DocumentsActivity : AppCompatActivity() {
                     "Thumbnails/${file.nameWithoutExtension}_thumb.jpg"
                 )
                 val thumbDeleted = if (thumbFile.exists()) thumbFile.delete() else true
+
+                // Удаляем индекс
+                FileManager.deleteIndexForPdf(this@DocumentsActivity, file.name)
+
                 pdfDeleted && thumbDeleted
             }
             if (success) {

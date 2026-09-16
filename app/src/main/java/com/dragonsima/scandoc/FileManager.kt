@@ -27,6 +27,7 @@ import org.opencv.core.MatOfInt
 object FileManager {
 
     private const val DOCUMENTS_FOLDER = "Documents"
+    private const val INDICES_FOLDER = "Indices"
     private const val THUMBNAILS_FOLDER = "Thumbnails"
     private const val TAG = "FileManager"
 
@@ -36,6 +37,7 @@ object FileManager {
     fun init(context: Context) {
         File(context.filesDir, DOCUMENTS_FOLDER).mkdirs()
         File(context.filesDir, THUMBNAILS_FOLDER).mkdirs()
+        File(context.filesDir, INDICES_FOLDER).mkdirs()
         Log.d(TAG, "Папки созданы")
     }
 
@@ -455,5 +457,103 @@ object FileManager {
 
         Log.d(TAG, "Пакет JPG сохранён: ${folder.absolutePath}, файлов: ${pages.size}")
         return folder
+    }
+
+    // ============= ИНДЕКС ДЛЯ ПОИСКА =============
+
+    /**
+     * Сохраняет текст для PDF в индекс.
+     * @param pdfName имя PDF-файла (с расширением), например "20250101_120000.pdf"
+     * @param text распознанный текст
+     */
+    fun saveIndexForPdf(context: Context, pdfName: String, text: String) {
+        if (text.isBlank()) return
+        val baseName = pdfName.substringBeforeLast(".pdf")
+        val indexFile = File(context.filesDir, "$INDICES_FOLDER/$baseName.txt")
+        try {
+            indexFile.writeText(text, Charsets.UTF_8)
+            Log.d(TAG, "Индекс сохранён: ${indexFile.name} (${text.length} симв.)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Ошибка записи индекса: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Читает текст-индекс для PDF. Возвращает null, если индекса нет.
+     */
+    fun getIndexForPdf(context: Context, pdfName: String): String? {
+        val baseName = pdfName.substringBeforeLast(".pdf")
+        val indexFile = File(context.filesDir, "$INDICES_FOLDER/$baseName.txt")
+        if (!indexFile.exists()) return null
+        return try {
+            indexFile.readText(Charsets.UTF_8)
+        } catch (e: Exception) {
+            Log.e(TAG, "Ошибка чтения индекса: ${e.message}", e)
+            null
+        }
+    }
+
+    /**
+     * Удаляет индекс при удалении PDF.
+     */
+    fun deleteIndexForPdf(context: Context, pdfName: String) {
+        val baseName = pdfName.substringBeforeLast(".pdf")
+        val indexFile = File(context.filesDir, "$INDICES_FOLDER/$baseName.txt")
+        if (indexFile.exists()) indexFile.delete()
+    }
+
+    /**
+     * Переименовывает индекс.
+     */
+    fun renameIndexForPdf(context: Context, oldPdfName: String, newPdfName: String) {
+        val oldBase = oldPdfName.substringBeforeLast(".pdf")
+        val newBase = newPdfName.substringBeforeLast(".pdf")
+        val oldFile = File(context.filesDir, "$INDICES_FOLDER/$oldBase.txt")
+        if (!oldFile.exists()) return
+        val newFile = File(context.filesDir, "$INDICES_FOLDER/$newBase.txt")
+        oldFile.renameTo(newFile)
+    }
+
+    /**
+     * Возвращает список имён PDF, в которых встречается запрос (без учёта регистра).
+     * Возвращает map: имя PDF -> количество совпадений.
+     */
+    fun searchInIndices(context: Context, query: String): Map<String, Int> {
+        if (query.isBlank()) return emptyMap()
+        val indicesDir = File(context.filesDir, INDICES_FOLDER)
+        if (!indicesDir.exists()) return emptyMap()
+
+        val lowerQuery = query.lowercase(Locale.getDefault())
+        val result = mutableMapOf<String, Int>()
+
+        indicesDir.listFiles { f -> f.extension == "txt" }?.forEach { indexFile ->
+            try {
+                val text = indexFile.readText(Charsets.UTF_8).lowercase(Locale.getDefault())
+                var count = 0
+                var idx = 0
+                while (true) {
+                    idx = text.indexOf(lowerQuery, idx)
+                    if (idx < 0) break
+                    count++
+                    idx += lowerQuery.length
+                }
+                if (count > 0) {
+                    val pdfName = "${indexFile.nameWithoutExtension}.pdf"
+                    result[pdfName] = count
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Ошибка чтения индекса ${indexFile.name}", e)
+            }
+        }
+        return result
+    }
+
+    /**
+     * Открывает первую страницу PDF, где встречается запрос.
+     * Пока не реализовано — возвращает 1.
+     * Можно расширить: хранить текст построчно с номерами страниц.
+     */
+    fun findFirstPageWithQuery(context: Context, pdfName: String, query: String): Int {
+        return 1
     }
 }

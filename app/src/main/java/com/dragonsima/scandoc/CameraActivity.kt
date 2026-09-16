@@ -1046,11 +1046,17 @@ class CameraActivity : AppCompatActivity() {
             try {
                 val visionText = lastRecognizedText.get()
                 val pdfFile = if (visionText != null) {
-                    // С текстовым слоем — поиск и выделение работают
                     FileManager.saveToPdfWithText(this, matToSave, visionText)
                 } else {
-                    // Без OCR — обычный PDF с картинкой
                     FileManager.saveToPdf(this, matToSave)
+                }
+
+                // Сохраняем индекс для поиска (в фоне — не блокируем)
+                if (visionText != null && visionText.text.isNotBlank()) {
+                    FileManager.saveIndexForPdf(this, pdfFile.name, visionText.text)
+                } else {
+                    // OCR не выполнялся — запускаем в фоне после сохранения
+                    runBackgroundOcrIndexing(pdfFile.name, matToSave)
                 }
                 val resultIntent = Intent().apply {
                     putExtra("savedPdfPath", pdfFile.absolutePath)
@@ -1075,6 +1081,36 @@ class CameraActivity : AppCompatActivity() {
                 matToSave.release()
             }
         }
+    }
+
+    /**
+     * Запускает OCR в фоне и сохраняет индекс для поиска.
+     * Не блокирует пользователя — работает после сохранения PDF.
+     */
+    private fun runBackgroundOcrIndexing(pdfName: String, mat: Mat) {
+        val matCopy = mat.clone()
+        Thread {
+            try {
+                val bitmap = matToBitmap(matCopy)
+                val image = InputImage.fromBitmap(bitmap, 0)
+                getTextRecognizer().process(image)
+                    .addOnSuccessListener { visionText ->
+                        if (visionText.text.isNotBlank()) {
+                            FileManager.saveIndexForPdf(applicationContext, pdfName, visionText.text)
+                        }
+                        bitmap.recycle()
+                        matCopy.release()
+                    }
+                    .addOnFailureListener { e ->
+                        Log.e(TAG, "Background OCR error", e)
+                        bitmap.recycle()
+                        matCopy.release()
+                    }
+            } catch (e: Exception) {
+                Log.e(TAG, "runBackgroundOcrIndexing error", e)
+                matCopy.release()
+            }
+        }.start()
     }
 
     /**
@@ -1190,6 +1226,15 @@ class CameraActivity : AppCompatActivity() {
         saveExecutor.execute {
             try {
                 val pdfFile = FileManager.saveBatchToPdfWithText(this, pages)
+
+                // Индексируем текст со всех страниц
+                val combinedText = pages.mapNotNull { it.visionText?.text }
+                    .filter { it.isNotBlank() }
+                    .joinToString("\n\n---\n\n")
+                if (combinedText.isNotBlank()) {
+                    FileManager.saveIndexForPdf(this, pdfFile.name, combinedText)
+                }
+
                 val resultIntent = Intent().apply {
                     putExtra("savedPdfPath", pdfFile.absolutePath)
                     putExtra("savedPdfName", pdfFile.name)

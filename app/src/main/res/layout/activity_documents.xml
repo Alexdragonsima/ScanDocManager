@@ -4,7 +4,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="#F5F3F0">
+    android:background="@color/background">
 
     <!-- Верхняя панель -->
     <LinearLayout
@@ -16,7 +16,6 @@
         android:background="@color/surface"
         android:elevation="4dp">
 
-        <!-- Назад -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/backButton"
             android:layout_width="40dp"
@@ -29,7 +28,6 @@
             android:insetBottom="0dp"
             android:background="@android:color/transparent"/>
 
-        <!-- Заголовок -->
         <TextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
@@ -40,7 +38,6 @@
             android:textColor="@color/text_primary"
             android:gravity="center"/>
 
-        <!-- Сортировка -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/sortButton"
             android:layout_width="40dp"
@@ -54,15 +51,39 @@
             android:background="@android:color/transparent"/>
     </LinearLayout>
 
+    <!-- Поле поиска -->
+    <EditText
+        android:id="@+id/searchInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginEnd="16dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="8dp"
+        android:hint="Поиск по содержимому"
+        android:padding="12dp"
+        android:background="@color/surface"
+        android:textColor="@color/text_primary"
+        android:textColorHint="@color/text_secondary"
+        android:textSize="14sp"
+        android:inputType="text"
+        android:imeOptions="actionSearch"
+        android:drawablePadding="8dp"
+        android:maxLines="1"
+        android:singleLine="true" />
+
+    <!-- Список + пустое состояние -->
     <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="match_parent">
+        android:layout_height="0dp"
+        android:layout_weight="1">
 
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/documentsRecyclerView"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:padding="16dp"/>
+            android:padding="16dp"
+            android:clipToPadding="false" />
 
         <TextView
             android:id="@+id/emptyState"
@@ -70,7 +91,8 @@
             android:layout_height="wrap_content"
             android:layout_gravity="center"
             android:text="Нет документов"
+            android:textColor="@color/text_secondary"
             android:textSize="20sp"
-            android:visibility="gone"/>
+            android:visibility="gone" />
     </FrameLayout>
 </LinearLayout>
