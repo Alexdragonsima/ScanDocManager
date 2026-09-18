@@ -67,14 +67,14 @@ class CropActivity : AppCompatActivity() {
         imageView = findViewById(R.id.cropImage)
 
         imagePath = intent.getStringExtra("imagePath") ?: run {
-            Toast.makeText(this, "Не указан путь к изображению", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.crop_no_image), Toast.LENGTH_SHORT).show()
             finish()
             return
         }
 
         val mat = Imgcodecs.imread(imagePath)
         if (mat.empty()) {
-            Toast.makeText(this, "Не удалось загрузить изображение", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.crop_load_error), Toast.LENGTH_SHORT).show()
             finish()
             return
         }
@@ -165,7 +165,7 @@ class CropActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.manualButton).setOnClickListener {
-            Toast.makeText(this, "Перетащите углы для ручной настройки", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.crop_manual_hint), Toast.LENGTH_SHORT).show()
         }
 
         findViewById<ImageView>(R.id.backButton).setOnClickListener { finish() }
@@ -316,7 +316,7 @@ class CropActivity : AppCompatActivity() {
                     }
                 } else {
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(this@CropActivity, "Не удалось найти документ", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@CropActivity, getString(R.string.crop_detect_failed), Toast.LENGTH_SHORT).show()
                     }
                 }
             } finally {

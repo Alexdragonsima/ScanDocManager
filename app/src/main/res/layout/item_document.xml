@@ -44,6 +44,16 @@
                 android:layout_height="wrap_content"
                 android:textSize="11sp"
                 android:textColor="@color/text_secondary"/>
+
+            <TextView
+                android:id="@+id/matchCount"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:textColor="@color/primary_color"
+                android:layout_marginTop="2dp"
+                android:visibility="gone" />
         </LinearLayout>
 
         <ImageView

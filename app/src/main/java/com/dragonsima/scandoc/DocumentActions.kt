@@ -14,7 +14,7 @@ object DocumentActions {
 
     fun openPdf(context: Context, file: File): Boolean {
         if (!file.exists()) {
-            Toast.makeText(context, "Файл не найден", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.camera_file_not_found), Toast.LENGTH_SHORT).show()
             return false
         }
         return try {
@@ -30,14 +30,14 @@ object DocumentActions {
             context.startActivity(intent)
             true
         } catch (e: Exception) {
-            Toast.makeText(context, "Нет программы для просмотра PDF", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.actions_no_viewer_pdf), Toast.LENGTH_SHORT).show()
             false
         }
     }
 
     fun sharePdf(context: Context, file: File): Boolean {
         if (!file.exists()) {
-            Toast.makeText(context, "Файл не найден", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.camera_file_not_found), Toast.LENGTH_SHORT).show()
             return false
         }
         return try {
@@ -51,10 +51,10 @@ object DocumentActions {
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(intent, "Поделиться"))
+            context.startActivity(Intent.createChooser(intent, context.getString(R.string.actions_share_chooser_pdf)))
             true
         } catch (e: Exception) {
-            Toast.makeText(context, "Ошибка при попытке поделиться", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.actions_share_error), Toast.LENGTH_SHORT).show()
             false
         }
     }
@@ -71,23 +71,23 @@ object DocumentActions {
         onDone: () -> Unit
     ) {
         val message = if (pagesCount > 1) {
-            "${file.name}\nСтраниц: $pagesCount"
+            context.getString(R.string.actions_saved_multi, file.name, pagesCount)
         } else {
             file.name
         }
 
         androidx.appcompat.app.AlertDialog.Builder(context)
-            .setTitle("✅ PDF сохранён")
+            .setTitle(context.getString(R.string.actions_saved_title))
             .setMessage(message)
-            .setPositiveButton("Открыть") { _, _ ->
+            .setPositiveButton(context.getString(R.string.common_open)) { _, _ ->
                 openPdf(context, file)
                 onDone()
             }
-            .setNeutralButton("Поделиться") { _, _ ->
+            .setNeutralButton(context.getString(R.string.common_share)) { _, _ ->
                 sharePdf(context, file)
                 onDone()
             }
-            .setNegativeButton("Готово") { _, _ ->
+            .setNegativeButton(context.getString(R.string.common_done)) { _, _ ->
                 onDone()
             }
             .setCancelable(false)
@@ -96,7 +96,7 @@ object DocumentActions {
 
     fun openImage(context: Context, file: File): Boolean {
         if (!file.exists()) {
-            Toast.makeText(context, "Файл не найден", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.camera_file_not_found), Toast.LENGTH_SHORT).show()
             return false
         }
         return try {
@@ -112,7 +112,7 @@ object DocumentActions {
             context.startActivity(intent)
             true
         } catch (e: Exception) {
-            Toast.makeText(context, "Нет программы для просмотра", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.actions_no_viewer_image), Toast.LENGTH_SHORT).show()
             false
         }
     }
@@ -130,10 +130,10 @@ object DocumentActions {
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(intent, "Поделиться"))
+            context.startActivity(Intent.createChooser(intent, context.getString(R.string.actions_share_chooser_image)))
             true
         } catch (e: Exception) {
-            Toast.makeText(context, "Ошибка", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.actions_share_error), Toast.LENGTH_SHORT).show()
             false
         }
     }
@@ -158,10 +158,10 @@ object DocumentActions {
                 putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris.toList()))
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(intent, "Поделиться"))
+            context.startActivity(Intent.createChooser(intent, context.getString(R.string.actions_share_chooser_image)))
             true
         } catch (e: Exception) {
-            Toast.makeText(context, "Ошибка", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.actions_share_error), Toast.LENGTH_SHORT).show()
             false
         }
     }

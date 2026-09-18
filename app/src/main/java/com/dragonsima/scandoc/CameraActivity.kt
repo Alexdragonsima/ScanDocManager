@@ -120,7 +120,7 @@ class CameraActivity : AppCompatActivity() {
     ) { isGranted ->
         if (isGranted) startCamera()
         else {
-            Toast.makeText(this, "Нет разрешения на камеру", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, getString(R.string.camera_no_permission), Toast.LENGTH_LONG).show()
             finish()
         }
     }
@@ -233,13 +233,12 @@ class CameraActivity : AppCompatActivity() {
         retakeButton.setOnLongClickListener {
             if (multiPageMode) {
                 androidx.appcompat.app.AlertDialog.Builder(this@CameraActivity)
-                    .setTitle("Переснять снимок?")
-                    .setMessage("Текущая страница будет отброшена без сохранения.")
-                    .setPositiveButton("Переснять") { _, _ ->
-                        // Просто возвращаемся к камере без сохранения
+                    .setTitle(getString(R.string.multi_page_dialog_retake_title))
+                    .setMessage(getString(R.string.multi_page_dialog_retake_message))
+                    .setPositiveButton(getString(R.string.multi_page_dialog_retake_confirm)) { _, _ ->
                         returnToCameraAfterPageAdded()
                     }
-                    .setNegativeButton("Отмена", null)
+                    .setNegativeButton(getString(R.string.common_cancel), null)
                     .show()
                 true
             } else false
@@ -252,7 +251,7 @@ class CameraActivity : AppCompatActivity() {
 
         findViewById<View>(R.id.ocrButton).setOnClickListener {
             val mat = baseMat ?: run {
-                Toast.makeText(this, "Нет изображения", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.camera_no_image), Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             progressBar.visibility = View.VISIBLE
@@ -268,7 +267,7 @@ class CameraActivity : AppCompatActivity() {
                             if (visionText.text.isNotBlank()) {
                                 startActivity(OcrResultActivity.createIntent(this, visionText.text))
                             } else {
-                                Toast.makeText(this, "Текст не распознан", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(this, getString(R.string.camera_ocr_failed), Toast.LENGTH_SHORT).show()
                             }
                         }
                     }
@@ -276,7 +275,7 @@ class CameraActivity : AppCompatActivity() {
                         Log.e(TAG, "OCR failed", e)
                         runOnUiThread {
                             progressBar.visibility = View.GONE
-                            Toast.makeText(this, "Ошибка OCR: ${e.message}", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this, getString(R.string.camera_ocr_error, e.message ?: ""), Toast.LENGTH_SHORT).show()
                         }
                     }
             }
@@ -291,7 +290,7 @@ class CameraActivity : AppCompatActivity() {
             if (isMlKitAvailable()) {
                 startMlKitScanner()
             } else {
-                Toast.makeText(this, "ML Kit недоступен. Используется OpenCV.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.mlkit_unavailable_fallback), Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -319,12 +318,12 @@ class CameraActivity : AppCompatActivity() {
                 val hasActiveShot = baseMat != null
                 if (hasActiveShot) {
                     androidx.appcompat.app.AlertDialog.Builder(this@CameraActivity)
-                        .setTitle("Отменить снимок?")
-                        .setMessage("Текущий снимок не будет добавлен.")
-                        .setPositiveButton("Отменить снимок") { _, _ ->
+                        .setTitle(getString(R.string.multi_page_dialog_cancel_shot_title))
+                        .setMessage(getString(R.string.multi_page_dialog_cancel_shot_message))
+                        .setPositiveButton(getString(R.string.multi_page_dialog_cancel_shot_confirm)) { _, _ ->
                             returnToCameraAfterPageAdded()
                         }
-                        .setNegativeButton("Остаться", null)
+                        .setNegativeButton(getString(R.string.multi_page_dialog_cancel_shot_stay), null)
                         .show()
                     return
                 }
@@ -333,18 +332,18 @@ class CameraActivity : AppCompatActivity() {
                 if (PageRepository.getCount() > 0 && !pendingBackAction) {
                     pendingBackAction = true
                     androidx.appcompat.app.AlertDialog.Builder(this@CameraActivity)
-                        .setTitle("Завершить без сохранения?")
-                        .setMessage("Накоплено страниц: ${PageRepository.getCount()}.")
-                        .setPositiveButton("Сохранить") { _, _ ->
+                        .setTitle(getString(R.string.multi_page_dialog_exit_title))
+                        .setMessage(getString(R.string.multi_page_dialog_exit_message, PageRepository.getCount()))
+                        .setPositiveButton(getString(R.string.multi_page_dialog_exit_save)) { _, _ ->
                             pendingBackAction = false
                             finishMultiPageSession()
                         }
-                        .setNeutralButton("Выйти без сохранения") { _, _ ->
+                        .setNeutralButton(getString(R.string.multi_page_dialog_exit_no_save)) { _, _ ->
                             pendingBackAction = false
                             PageRepository.clear()
                             finish()
                         }
-                        .setNegativeButton("Отмена") { _, _ ->
+                        .setNegativeButton(getString(R.string.common_cancel)) { _, _ ->
                             pendingBackAction = false
                         }
                         .setOnCancelListener {
@@ -362,32 +361,28 @@ class CameraActivity : AppCompatActivity() {
 
     private fun showFormatDialog() {
         val options = arrayOf(
-            "📄 Сохранить как PDF",
-            "🖼 Сохранить как JPG"
+            getString(R.string.save_format_pdf),
+            getString(R.string.save_format_jpg)
         )
         androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("Формат сохранения")
+            .setTitle(getString(R.string.save_format_title))
             .setItems(options) { _, which ->
                 when (which) {
-                    0 -> {
-                        if (multiPageMode) finishMultiPageSession() else saveDocument()
-                    }
-                    1 -> {
-                        if (multiPageMode) finishMultiPageAsJpg() else saveDocumentAsJpg()
-                    }
+                    0 -> { if (multiPageMode) finishMultiPageSession() else saveDocument() }
+                    1 -> { if (multiPageMode) finishMultiPageAsJpg() else saveDocumentAsJpg() }
                 }
             }
-            .setNegativeButton("Отмена", null)
+            .setNegativeButton(getString(R.string.common_cancel), null)
             .show()
     }
     private fun saveDocumentAsJpg() {
         val mat = baseMat ?: run {
-            Toast.makeText(this, "Нет изображения", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.camera_no_image), Toast.LENGTH_SHORT).show()
             return
         }
         val finalMat = filterCache[currentFilter] ?: mat
         if (finalMat.empty()) {
-            Toast.makeText(this, "Изображение пустое", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.camera_empty_image), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -407,17 +402,17 @@ class CameraActivity : AppCompatActivity() {
                     saveResultButton.isEnabled = true
                     setResult(RESULT_OK, resultIntent)
                     androidx.appcompat.app.AlertDialog.Builder(this)
-                        .setTitle("✅ JPG сохранён")
+                        .setTitle(getString(R.string.save_jpg_saved))
                         .setMessage(jpgFile.name)
-                        .setPositiveButton("Открыть") { _, _ ->
+                        .setPositiveButton(getString(R.string.common_open)) { _, _ ->
                             DocumentActions.openImage(this, jpgFile)
                             finish()
                         }
-                        .setNeutralButton("Поделиться") { _, _ ->
+                        .setNeutralButton(getString(R.string.common_share)) { _, _ ->
                             DocumentActions.shareImage(this, jpgFile)
                             finish()
                         }
-                        .setNegativeButton("Готово") { _, _ -> finish() }
+                        .setNegativeButton(getString(R.string.common_done)) { _, _ -> finish() }
                         .setCancelable(false)
                         .show()
                 }
@@ -458,7 +453,7 @@ class CameraActivity : AppCompatActivity() {
 
         val pages = PageRepository.getAll()
         if (pages.isEmpty()) {
-            Toast.makeText(this, "Нет страниц для сохранения", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.multi_page_no_pages), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -481,17 +476,17 @@ class CameraActivity : AppCompatActivity() {
                     saveResultButton.isEnabled = true
                     setResult(RESULT_OK, resultIntent)
                     androidx.appcompat.app.AlertDialog.Builder(this)
-                        .setTitle("✅ Сохранено страниц: ${files.size}")
+                        .setTitle(getString(R.string.save_multi_jpg_saved, files.size))
                         .setMessage(folder.name)
-                        .setPositiveButton("Открыть первую") { _, _ ->
+                        .setPositiveButton(getString(R.string.save_open_first)) { _, _ ->
                             files.firstOrNull()?.let { DocumentActions.openImage(this, it) }
                             finish()
                         }
-                        .setNeutralButton("Поделиться всеми") { _, _ ->
+                        .setNeutralButton(getString(R.string.save_share_all)) { _, _ ->
                             DocumentActions.shareImages(this, files)
                             finish()
                         }
-                        .setNegativeButton("Готово") { _, _ -> finish() }
+                        .setNegativeButton(getString(R.string.common_done)) { _, _ -> finish() }
                         .setCancelable(false)
                         .show()
                 }
@@ -500,7 +495,7 @@ class CameraActivity : AppCompatActivity() {
                 runOnUiThread {
                     progressBar.visibility = View.GONE
                     saveResultButton.isEnabled = true
-                    Toast.makeText(this, "Ошибка: ${e.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, getString(R.string.camera_save_failed, e.message ?: ""), Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -519,7 +514,7 @@ class CameraActivity : AppCompatActivity() {
         }
         Toast.makeText(
             this,
-            "Короткий тап — добавить.\nДолгий — переснять.\nДолгое на «Обрезать» — повернуть.",
+            getString(R.string.multi_page_hint),
             Toast.LENGTH_LONG
         ).show()
 
@@ -531,7 +526,7 @@ class CameraActivity : AppCompatActivity() {
         val hasCurrent = baseMat != null
 
         if (pages.isEmpty() && !hasCurrent) {
-            Toast.makeText(this, "Пока нет страниц", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.page_list_empty), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -545,9 +540,9 @@ class CameraActivity : AppCompatActivity() {
         val title = sheetView.findViewById<android.widget.TextView>(R.id.pagesTitle)
 
         title.text = if (hasCurrent) {
-            "Готово: ${pages.size}  ·  +1 не добавлена"
+            getString(R.string.page_list_title_with_current, pages.size)
         } else {
-            "Страницы (${pages.size})"
+            getString(R.string.page_list_title, pages.size)
         }
 
         val adapter = PageThumbnailAdapter(
@@ -557,14 +552,14 @@ class CameraActivity : AppCompatActivity() {
             },
             onPageLongClick = { position ->
                 androidx.appcompat.app.AlertDialog.Builder(this)
-                    .setTitle("Удалить страницу ${position + 1}?")
-                    .setPositiveButton("Удалить") { _, _ ->
+                    .setTitle(getString(R.string.page_list_delete_title, position + 1))
+                    .setPositiveButton(getString(R.string.common_delete)) { _, _ ->
                         PageRepository.removeAt(position)
                         sheetDialog.dismiss()
                         updatePageCounter()
                         if (PageRepository.getCount() > 0) showPageListSheet()
                     }
-                    .setNegativeButton("Отмена", null)
+                    .setNegativeButton(getString(R.string.common_cancel), null)
                     .show()
             }
         )
@@ -615,7 +610,7 @@ class CameraActivity : AppCompatActivity() {
             }
             val page = list[currentIndex]
             imageView.setImageBitmap(page.thumbnail)
-            indicator.text = "${currentIndex + 1} / ${list.size}"
+            indicator.text = getString(R.string.page_viewer_indicator, currentIndex + 1, list.size)
 
             prevBtn.isEnabled = currentIndex > 0
             nextBtn.isEnabled = currentIndex < list.size - 1
@@ -637,8 +632,8 @@ class CameraActivity : AppCompatActivity() {
         }
         deleteBtn.setOnClickListener {
             androidx.appcompat.app.AlertDialog.Builder(this)
-                .setTitle("Удалить страницу ${currentIndex + 1}?")
-                .setPositiveButton("Удалить") { _, _ ->
+                .setTitle(getString(R.string.page_list_delete_title, currentIndex + 1))
+                .setPositiveButton(getString(R.string.common_delete)) { _, _ ->
                     PageRepository.removeAt(currentIndex)
                     val remaining = PageRepository.getCount()
                     if (remaining == 0) {
@@ -649,7 +644,7 @@ class CameraActivity : AppCompatActivity() {
                     }
                     updatePageCounter()
                 }
-                .setNegativeButton("Отмена", null)
+                .setNegativeButton(getString(R.string.common_cancel), null)
                 .show()
         }
 
@@ -670,19 +665,19 @@ class CameraActivity : AppCompatActivity() {
         val hasCurrent = baseMat != null
 
         pageCounterText.text = if (hasCurrent) {
-            "📄 Готово: $done  ·  Снимаем стр. ${done + 1}"
+            getString(R.string.multi_page_shooting, done, done + 1)
         } else {
-            "📄 Готово: $done  ·  Готов к съёмке"
+            getString(R.string.multi_page_ready, done)
         }
         pageCounterText.visibility = View.VISIBLE
     }
 
     private fun updateHdrButtonState() {
         if (hdrEnabled) {
-            hdrButton.text = "HDR: ВКЛ"
+            hdrButton.text = getString(R.string.hdr_on)
             hdrButton.setBackgroundColor(android.graphics.Color.parseColor("#4F46E5"))
         } else {
-            hdrButton.text = "HDR: ВЫКЛ"
+            hdrButton.text = getString(R.string.hdr_off)
             hdrButton.setBackgroundColor(android.graphics.Color.parseColor("#9E9E9E"))
         }
     }
@@ -792,7 +787,7 @@ class CameraActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 Log.e(TAG, "Camera start error", e)
                 runOnUiThread {
-                    Toast.makeText(this, "Не удалось запустить камеру", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, getString(R.string.camera_camera_start_error), Toast.LENGTH_LONG).show()
                     finish()
                 }
             }
@@ -852,7 +847,7 @@ class CameraActivity : AppCompatActivity() {
     // ==================== Съёмка ====================
     private fun takePicture() {
         val capture = imageCapture ?: run {
-            Toast.makeText(this, "Камера не готова", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.camera_not_ready), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -896,7 +891,7 @@ class CameraActivity : AppCompatActivity() {
                         captureButton.isEnabled = true
                         Toast.makeText(
                             this@CameraActivity,
-                            "Ошибка съёмки: ${exception.message}",
+                            getString(R.string.camera_capture_error, exception.message ?: ""),
                             Toast.LENGTH_LONG
                         ).show()
                     }
@@ -928,7 +923,7 @@ class CameraActivity : AppCompatActivity() {
             runOnUiThread {
                 progressBar.visibility = View.GONE
                 captureButton.isEnabled = true
-                Toast.makeText(this, "Файл не найден", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.camera_file_not_found), Toast.LENGTH_SHORT).show()
             }
             return
         }
@@ -939,7 +934,7 @@ class CameraActivity : AppCompatActivity() {
             runOnUiThread {
                 progressBar.visibility = View.GONE
                 captureButton.isEnabled = true
-                Toast.makeText(this, "Ошибка чтения", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.camera_read_error), Toast.LENGTH_SHORT).show()
             }
             return
         }
@@ -960,8 +955,7 @@ class CameraActivity : AppCompatActivity() {
             runOnUiThread {
                 progressBar.visibility = View.GONE
                 captureButton.isEnabled = true
-                Toast.makeText(this, "Не удалось найти документ", Toast.LENGTH_SHORT).show()
-            }
+                Toast.makeText(this, getString(R.string.camera_doc_not_found), Toast.LENGTH_SHORT).show()            }
             return
         }
 
@@ -972,8 +966,7 @@ class CameraActivity : AppCompatActivity() {
             runOnUiThread {
                 progressBar.visibility = View.GONE
                 captureButton.isEnabled = true
-                Toast.makeText(this, "Ошибка сохранения", Toast.LENGTH_SHORT).show()
-            }
+                Toast.makeText(this, getString(R.string.camera_save_error), Toast.LENGTH_SHORT).show()            }
             return
         }
         originalImagePath.set(rawFile.absolutePath)
@@ -1029,12 +1022,12 @@ class CameraActivity : AppCompatActivity() {
 
     private fun saveDocument() {
         val mat = baseMat ?: run {
-            Toast.makeText(this, "Нет изображения", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.camera_no_image), Toast.LENGTH_SHORT).show()
             return
         }
         val finalMat = filterCache[currentFilter] ?: mat
         if (finalMat.empty()) {
-            Toast.makeText(this, "Изображение пустое", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.camera_empty_image), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -1075,8 +1068,11 @@ class CameraActivity : AppCompatActivity() {
                 runOnUiThread {
                     progressBar.visibility = View.GONE
                     saveResultButton.isEnabled = true
-                    Toast.makeText(this, "Ошибка сохранения: ${e.message}", Toast.LENGTH_LONG).show()
-                }
+                    Toast.makeText(
+                        this,
+                        getString(R.string.camera_save_failed, e.message ?: ""),
+                        Toast.LENGTH_LONG
+                    ).show()                }
             } finally {
                 matToSave.release()
             }
@@ -1118,13 +1114,12 @@ class CameraActivity : AppCompatActivity() {
      */
     private fun addCurrentPageToRepository() {
         val mat = baseMat ?: run {
-            Toast.makeText(this, "Нет изображения", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.camera_no_image), Toast.LENGTH_SHORT).show()
             return
         }
-        // Берём отфильтрованную версию, если фильтр применён
         val filtered = filterCache[currentFilter] ?: mat
         if (filtered.empty()) {
-            Toast.makeText(this, "Изображение пустое", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.camera_empty_image), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -1146,11 +1141,11 @@ class CameraActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Log.e(TAG, "addCurrentPageToRepository error", e)
             if (!scaledThumb.isRecycled) scaledThumb.recycle()
-            Toast.makeText(this, "Ошибка добавления страницы", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.multi_page_add_error), Toast.LENGTH_SHORT).show()
             return
         }
 
-        Toast.makeText(this, "Страница добавлена (${PageRepository.getCount()})", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, getString(R.string.multi_page_added, PageRepository.getCount()), Toast.LENGTH_SHORT).show()
 
         // Возвращаемся в режим камеры
         returnToCameraAfterPageAdded()
@@ -1216,7 +1211,7 @@ class CameraActivity : AppCompatActivity() {
 
         val pages = PageRepository.getAll()
         if (pages.isEmpty()) {
-            Toast.makeText(this, "Нет страниц для сохранения", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.multi_page_no_pages), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -1253,7 +1248,7 @@ class CameraActivity : AppCompatActivity() {
                 runOnUiThread {
                     progressBar.visibility = View.GONE
                     saveResultButton.isEnabled = true
-                    Toast.makeText(this, "Ошибка: ${e.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, getString(R.string.camera_save_failed, e.message ?: ""), Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -1289,13 +1284,13 @@ class CameraActivity : AppCompatActivity() {
         processingExecutor.execute {
             try {
                 if (!File(originalPath).exists()) {
-                    runOnUiThread { Toast.makeText(this, "Файл не найден", Toast.LENGTH_SHORT).show() }
+                    runOnUiThread { Toast.makeText(this, getString(R.string.camera_file_not_found), Toast.LENGTH_SHORT).show() }
                     return@execute
                 }
                 val image = Imgcodecs.imread(originalPath)
                 if (image.empty()) {
                     image.release()
-                    runOnUiThread { Toast.makeText(this, "Ошибка чтения", Toast.LENGTH_SHORT).show() }
+                    runOnUiThread { Toast.makeText(this, getString(R.string.camera_read_error), Toast.LENGTH_SHORT).show() }
                     return@execute
                 }
 
@@ -1303,7 +1298,7 @@ class CameraActivity : AppCompatActivity() {
                 image.release()
 
                 if (rawMat == null) {
-                    runOnUiThread { Toast.makeText(this, "Не удалось обработать", Toast.LENGTH_SHORT).show() }
+                    runOnUiThread { Toast.makeText(this, getString(R.string.camera_process_error), Toast.LENGTH_SHORT).show() }
                     return@execute
                 }
 
@@ -1316,11 +1311,11 @@ class CameraActivity : AppCompatActivity() {
                     }
                 } else {
                     rawMat.release()
-                    runOnUiThread { Toast.makeText(this, "Ошибка сохранения", Toast.LENGTH_SHORT).show() }
+                    runOnUiThread { Toast.makeText(this, getString(R.string.camera_save_error), Toast.LENGTH_SHORT).show() }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "processImageFromPath error", e)
-                runOnUiThread { Toast.makeText(this, "Ошибка", Toast.LENGTH_SHORT).show() }
+                runOnUiThread { Toast.makeText(this, getString(R.string.common_error), Toast.LENGTH_SHORT).show() }
             }
         }
     }
@@ -1513,7 +1508,7 @@ class CameraActivity : AppCompatActivity() {
                         progressBar.visibility = View.GONE
                         hdrButton.isEnabled = true
                         captureButton.isEnabled = true
-                        Toast.makeText(this, "Ошибка HDR: не удалось снять кадры", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, getString(R.string.hdr_capture_failed), Toast.LENGTH_SHORT).show()
                     }
                     return@execute
                 }
@@ -1527,7 +1522,7 @@ class CameraActivity : AppCompatActivity() {
                         progressBar.visibility = View.GONE
                         hdrButton.isEnabled = true
                         captureButton.isEnabled = true
-                        Toast.makeText(this, "Ошибка HDR: недостаточно кадров", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, getString(R.string.hdr_not_enough_frames), Toast.LENGTH_SHORT).show()
                     }
                     return@execute
                 }
@@ -1556,7 +1551,7 @@ class CameraActivity : AppCompatActivity() {
                         progressBar.visibility = View.GONE
                         hdrButton.isEnabled = true
                         captureButton.isEnabled = true
-                        Toast.makeText(this, "Ошибка обработки HDR", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, getString(R.string.hdr_process_failed), Toast.LENGTH_SHORT).show()
                     }
                     return@execute
                 }
@@ -1578,7 +1573,7 @@ class CameraActivity : AppCompatActivity() {
                         progressBar.visibility = View.GONE
                         hdrButton.isEnabled = true
                         captureButton.isEnabled = true
-                        Toast.makeText(this, "Ошибка сохранения", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, getString(R.string.camera_save_error), Toast.LENGTH_SHORT).show()
                     }
                 }
                 // ---- ИЗМЕНЕНИЕ ЗАКАНЧИВАЕТСЯ ----
@@ -1588,7 +1583,7 @@ class CameraActivity : AppCompatActivity() {
                     progressBar.visibility = View.GONE
                     hdrButton.isEnabled = true
                     captureButton.isEnabled = true
-                    Toast.makeText(this, "Ошибка HDR: ${e.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, getString(R.string.hdr_error, e.message ?: ""), Toast.LENGTH_SHORT).show()
                 }
             } finally {
                 analysisPaused.set(false)
@@ -1618,7 +1613,7 @@ class CameraActivity : AppCompatActivity() {
             }
             .addOnFailureListener { e ->
                 Log.e(TAG, "ML Kit scanner error", e)
-                Toast.makeText(this, "ML Kit недоступен, используется OpenCV", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.mlkit_unavailable_short), Toast.LENGTH_SHORT).show()
                 takePicture()
             }
     }
@@ -1632,7 +1627,7 @@ class CameraActivity : AppCompatActivity() {
         }
 
         if (bitmap == null) {
-            Toast.makeText(this, "Не удалось получить изображение", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.mlkit_image_error), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -1751,7 +1746,7 @@ class CameraActivity : AppCompatActivity() {
      */
     private fun rotateCurrentImage(degrees: Int) {
         val mat = baseMat ?: run {
-            Toast.makeText(this, "Нет изображения", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.rotate_done, degrees), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -1769,25 +1764,25 @@ class CameraActivity : AppCompatActivity() {
         // Пересчитываем текущий фильтр
         applyFilter(currentFilter)
 
-        Toast.makeText(this, "Повёрнуто на $degrees°", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, getString(R.string.rotate_done, degrees), Toast.LENGTH_SHORT).show()
     }
 
     private fun showRotateDialog() {
         val options = arrayOf(
-            "↺  Повернуть влево (90°)",
-            "↻  Повернуть вправо (90°)",
-            "⟳  Повернуть на 180°"
+            getString(R.string.rotate_left),
+            getString(R.string.rotate_right),
+            getString(R.string.rotate_180)
         )
         androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("Повернуть изображение")
+            .setTitle(getString(R.string.rotate_title))
             .setItems(options) { _, which ->
                 when (which) {
-                    0 -> rotateCurrentImage(270)  // влево = против часовой = 270° по часовой
+                    0 -> rotateCurrentImage(270)
                     1 -> rotateCurrentImage(90)
                     2 -> rotateCurrentImage(180)
                 }
             }
-            .setNegativeButton("Отмена", null)
+            .setNegativeButton(getString(R.string.common_cancel), null)
             .show()
     }
 

@@ -39,6 +39,19 @@
             android:gravity="center"/>
 
         <com.google.android.material.button.MaterialButton
+            android:id="@+id/reindexButton"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginEnd="4dp"
+            app:icon="@android:drawable/ic_menu_rotate"
+            app:iconSize="20dp"
+            app:iconTint="@color/text_primary"
+            app:cornerRadius="20dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:background="@android:color/transparent"/>
+
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/sortButton"
             android:layout_width="40dp"
             android:layout_height="40dp"

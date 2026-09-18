@@ -23,9 +23,10 @@ class OnboardingAdapter(
     }
 
     override fun onBindViewHolder(holder: OnboardingViewHolder, position: Int) {
-        holder.icon.text = pages[position].icon
-        holder.title.text = pages[position].title
-        holder.description.text = pages[position].description
+        val page = pages[position]
+        holder.icon.text = page.icon
+        holder.title.text = context.getString(page.titleRes)
+        holder.description.text = context.getString(page.descRes)
     }
 
     override fun getItemCount() = pages.size

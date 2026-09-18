@@ -35,7 +35,7 @@ class MainActivity : AppCompatActivity() {
             if (savedPdfPath != null) {
                 Toast.makeText(
                     this,
-                    "✅ Документ сохранён: ${savedPdfName ?: "файл"}",
+                    getString(R.string.main_saved_toast, savedPdfName ?: getString(R.string.main_saved_file)),
                     Toast.LENGTH_LONG
                 ).show()
                 loadLastDocumentPreview()
@@ -60,9 +60,9 @@ class MainActivity : AppCompatActivity() {
         opencvLoaded = OpenCVLoader.initLocal()
         if (!opencvLoaded) {
             Log.e(TAG, "OpenCV failed to load")
-            Toast.makeText(this, "Ошибка загрузки OpenCV. Функция сканирования недоступна.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, getString(R.string.main_opencv_error), Toast.LENGTH_LONG).show()
             binding.captureButton.isEnabled = false
-        } else {
+        }else {
             Log.d(TAG, "OpenCV loaded successfully")
             binding.captureButton.isEnabled = true
         }
@@ -91,7 +91,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 cameraLauncher.launch(intent)
             } else {
-                Toast.makeText(this, "OpenCV недоступен", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.main_opencv_unavailable), Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -104,7 +104,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 cameraLauncher.launch(intent)
             } else {
-                Toast.makeText(this, "OpenCV недоступен", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.main_opencv_unavailable), Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -135,11 +135,11 @@ class MainActivity : AppCompatActivity() {
             if (bitmap != null) {
                 setPreviewBitmap(bitmap)
                 binding.previewImage.setImageBitmap(bitmap)
-                binding.statusText.text = "Последний документ"
+                binding.statusText.text = getString(R.string.main_status_last_document)
                 showPreview(true)
             } else {
                 showPreview(false)
-                binding.statusText.text = "Готов к сканированию"
+                binding.statusText.text = getString(R.string.main_status_ready)
             }
         }
     }

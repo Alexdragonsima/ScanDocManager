@@ -1,3 +1,199 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ScanDoc</string>
+
+    <!-- ============ Общие ============ -->
+    <string name="common_cancel">Отмена</string>
+    <string name="common_ok">ОК</string>
+    <string name="common_done">Готово</string>
+    <string name="common_save">Сохранить</string>
+    <string name="common_delete">Удалить</string>
+    <string name="common_share">Поделиться</string>
+    <string name="common_open">Открыть</string>
+    <string name="common_close">Закрыть</string>
+    <string name="common_retry">Повторить</string>
+    <string name="common_error">Ошибка</string>
+    <string name="common_loading">Загрузка…</string>
+
+    <!-- ============ MainActivity ============ -->
+    <string name="main_title">ScanDoc</string>
+    <string name="main_status_ready">Готов к сканированию</string>
+    <string name="main_status_last_document">Последний документ</string>
+    <string name="main_btn_scan">📷 Сканировать документ</string>
+    <string name="main_btn_multi_scan">📚  Многостраничный скан</string>
+    <string name="main_empty_title">Нет документов</string>
+    <string name="main_empty_desc">Нажмите кнопку сканирования, чтобы создать первый документ</string>
+    <string name="main_opencv_error">Ошибка загрузки OpenCV. Функция сканирования недоступна.</string>
+    <string name="main_opencv_unavailable">OpenCV недоступен</string>
+    <string name="main_saved_toast">✅ Документ сохранён: %s</string>
+    <string name="main_saved_file">файл</string>
+
+    <!-- ============ CameraActivity ============ -->
+    <string name="camera_no_permission">Нет разрешения на камеру</string>
+    <string name="camera_not_ready">Камера не готова</string>
+    <string name="camera_capture_error">Ошибка съёмки: %s</string>
+    <string name="camera_file_not_found">Файл не найден</string>
+    <string name="camera_read_error">Ошибка чтения</string>
+    <string name="camera_doc_not_found">Не удалось найти документ</string>
+    <string name="camera_save_error">Ошибка сохранения</string>
+    <string name="camera_no_image">Нет изображения</string>
+    <string name="camera_empty_image">Изображение пустое</string>
+    <string name="camera_saved_pdf">✅ Сохранено: %s</string>
+    <string name="camera_save_failed">Ошибка сохранения: %s</string>
+    <string name="camera_no_image_to_crop">Нет изображения для обрезки</string>
+    <string name="camera_copy_error">Ошибка копирования</string>
+    <string name="camera_process_error">Не удалось обработать</string>
+    <string name="camera_camera_start_error">Не удалось запустить камеру</string>
+    <string name="camera_ocr_failed">Текст не распознан</string>
+    <string name="camera_ocr_error">Ошибка OCR: %s</string>
+
+    <!-- HDR -->
+    <string name="hdr_not_enough_ev">Недостаточно доступных значений EV для HDR</string>
+    <string name="hdr_capture_failed">Ошибка HDR: не удалось снять кадры</string>
+    <string name="hdr_not_enough_frames">Ошибка HDR: недостаточно кадров</string>
+    <string name="hdr_process_failed">Ошибка обработки HDR</string>
+    <string name="hdr_error">Ошибка HDR: %s</string>
+    <string name="hdr_on">HDR: ВКЛ</string>
+    <string name="hdr_off">HDR: ВЫКЛ</string>
+
+    <!-- ML Kit -->
+    <string name="mlkit_unavailable_fallback">ML Kit недоступен. Используется OpenCV.</string>
+    <string name="mlkit_unavailable_short">ML Kit недоступен, используется OpenCV</string>
+    <string name="mlkit_image_error">Не удалось получить изображение</string>
+
+    <!-- Мультирежим -->
+    <string name="multi_page_added">Страница добавлена (%d)</string>
+    <string name="multi_page_add_error">Ошибка добавления страницы</string>
+    <string name="multi_page_no_pages">Нет страниц для сохранения</string>
+    <string name="multi_page_saved">✅ Сохранено страниц: %d</string>
+    <string name="multi_page_hint">Короткий тап — добавить.\nДолгий — переснять.\nДолгое на «Обрезать» — повернуть.</string>
+    <string name="multi_page_ready">📄 Готово: %d  ·  Готов к съёмке</string>
+    <string name="multi_page_shooting">📄 Готово: %d  ·  Снимаем стр. %d</string>
+    <string name="multi_page_dialog_retake_title">Переснять снимок?</string>
+    <string name="multi_page_dialog_retake_message">Текущая страница будет отброшена без сохранения.</string>
+    <string name="multi_page_dialog_retake_confirm">Переснять</string>
+    <string name="multi_page_dialog_cancel_shot_title">Отменить снимок?</string>
+    <string name="multi_page_dialog_cancel_shot_message">Текущий снимок не будет добавлен.</string>
+    <string name="multi_page_dialog_cancel_shot_confirm">Отменить снимок</string>
+    <string name="multi_page_dialog_cancel_shot_stay">Остаться</string>
+    <string name="multi_page_dialog_exit_title">Завершить без сохранения?</string>
+    <string name="multi_page_dialog_exit_message">Накоплено страниц: %d.</string>
+    <string name="multi_page_dialog_exit_save">Сохранить</string>
+    <string name="multi_page_dialog_exit_no_save">Выйти без сохранения</string>
+
+    <!-- Шторка страниц -->
+    <string name="page_list_empty">Пока нет страниц</string>
+    <string name="page_list_title">Страницы (%d)</string>
+    <string name="page_list_title_with_current">Готово: %d  ·  +1 не добавлена</string>
+    <string name="page_list_delete_title">Удалить страницу %d?</string>
+    <string name="page_viewer_indicator">%1$d / %2$d</string>
+
+    <!-- Сохранение -->
+    <string name="save_format_title">Формат сохранения</string>
+    <string name="save_format_pdf">📄 Сохранить как PDF</string>
+    <string name="save_format_jpg">🖼 Сохранить как JPG</string>
+    <string name="save_jpg_saved">✅ JPG сохранён</string>
+    <string name="save_multi_jpg_saved">✅ Сохранено страниц: %d</string>
+    <string name="save_open_first">Открыть первую</string>
+    <string name="save_share_all">Поделиться всеми</string>
+
+    <!-- Поворот -->
+    <string name="rotate_title">Повернуть изображение</string>
+    <string name="rotate_left">↺  Повернуть влево (90°)</string>
+    <string name="rotate_right">↻  Повернуть вправо (90°)</string>
+    <string name="rotate_180">⟳  Повернуть на 180°</string>
+    <string name="rotate_done">Повёрнуто на %d°</string>
+
+    <!-- ============ DocumentsActivity ============ -->
+    <string name="docs_title">Мои документы</string>
+    <string name="docs_search_hint">Поиск по содержимому</string>
+    <string name="docs_empty">Нет документов</string>
+    <string name="docs_empty_search">Ничего не найдено</string>
+    <string name="docs_match_count">Совпадений: %d</string>
+
+    <string name="docs_menu_open">📂 Открыть PDF</string>
+    <string name="docs_menu_share">📤 Поделиться</string>
+    <string name="docs_menu_rename">✏️ Переименовать</string>
+    <string name="docs_menu_delete">🗑 Удалить</string>
+
+    <string name="docs_delete_title">Удалить?</string>
+    <string name="docs_delete_message">Документ будет удалён безвозвратно</string>
+    <string name="docs_delete_confirm">Удалить</string>
+    <string name="docs_deleted">🗑 Удалено</string>
+    <string name="docs_delete_error">Ошибка удаления</string>
+
+    <string name="docs_rename_title">Переименовать</string>
+    <string name="docs_rename_save">Сохранить</string>
+    <string name="docs_rename_empty">Имя не может быть пустым</string>
+    <string name="docs_rename_forbidden">Недопустимые символы в имени</string>
+    <string name="docs_rename_exists">Файл с таким именем уже существует</string>
+    <string name="docs_renamed">✅ Переименовано</string>
+    <string name="docs_rename_error">Ошибка переименования</string>
+
+    <string name="docs_sort_title">Сортировка</string>
+    <string name="docs_sort_by_date">📅 По дате</string>
+    <string name="docs_sort_by_name">🔤 По имени</string>
+
+    <string name="docs_thumbnail_missing">Миниатюра не найдена</string>
+
+    <!-- Переиндексация -->
+    <string name="docs_reindex_title">Переиндексировать?</string>
+    <string name="docs_reindex_message">PDF без индекса: %d. Запустить распознавание? Это может занять несколько минут.</string>
+    <string name="docs_reindex_start">Запустить</string>
+    <string name="docs_reindex_all_done">Все PDF уже проиндексированы</string>
+    <string name="docs_reindex_progress_title">Индексация...</string>
+    <string name="docs_reindex_progress">%1$d / %2$d</string>
+    <string name="docs_reindex_result">Проиндексировано: %d из %d</string>
+
+    <!-- ============ OCR Result ============ -->
+    <string name="ocr_title">Распознанный текст</string>
+    <string name="ocr_stats">Символов: %1$d  ·  Без пробелов: %2$d  ·  Слов: %3$d  ·  Строк: %4$d</string>
+    <string name="ocr_empty">Текст пуст</string>
+    <string name="ocr_copied">Текст скопирован</string>
+    <string name="ocr_copy_all">Копировать всё</string>
+    <string name="ocr_share">Поделиться</string>
+    <string name="ocr_share_title">Поделиться текстом</string>
+    <string name="ocr_share_subject">Распознанный текст</string>
+
+    <!-- ============ DocumentActions ============ -->
+    <string name="actions_no_viewer_pdf">Нет программы для просмотра PDF</string>
+    <string name="actions_no_viewer_image">Нет программы для просмотра</string>
+    <string name="actions_share_error">Ошибка при попытке поделиться</string>
+    <string name="actions_saved_title">✅ PDF сохранён</string>
+    <string name="actions_saved_multi">%1$s\nСтраниц: %2$d</string>
+    <string name="actions_share_chooser_pdf">Поделиться</string>
+    <string name="actions_share_chooser_image">Поделиться</string>
+
+    <!-- ============ SettingsActivity ============ -->
+    <string name="settings_title">Настройки</string>
+    <string name="settings_dark_theme">Тёмная тема</string>
+    <string name="settings_language">Язык</string>
+    <string name="settings_onboarding">Показать обучение снова</string>
+
+    <!-- ============ OnboardingActivity ============ -->
+    <string name="onboarding_next">Далее →</string>
+    <string name="onboarding_start">🚀 Начать</string>
+    <string name="onboarding_skip">Пропустить</string>
+    <string name="onboarding_page1_title">Сканируйте документы</string>
+    <string name="onboarding_page1_desc">Мгновенное сканирование с автоматическим определением границ</string>
+    <string name="onboarding_page2_title">Распознавайте текст</string>
+    <string name="onboarding_page2_desc">OCR-распознавание на русском и английском</string>
+    <string name="onboarding_page3_title">Делитесь и храните</string>
+    <string name="onboarding_page3_desc">Экспорт в Google Drive, защита PDF паролем</string>
+
+    <!-- ============ CropActivity ============ -->
+    <string name="crop_apply">Применить</string>
+    <string name="crop_cancel">Отмена</string>
+    <string name="crop_original">Оригинал</string>
+    <string name="crop_auto_detect">Авто</string>
+    <string name="crop_manual">Ручной</string>
+    <string name="crop_manual_hint">Перетащите углы для ручной настройки</string>
+    <string name="crop_no_image">Не указан путь к изображению</string>
+    <string name="crop_load_error">Не удалось загрузить изображение</string>
+    <string name="crop_detect_failed">Не удалось найти документ</string>
+
+    <!-- ============ Меню ============ -->
+    <string name="menu_documents">Документы</string>
+    <string name="menu_settings">Настройки</string>
+
 </resources>

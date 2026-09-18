@@ -27,6 +27,12 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import android.graphics.Bitmap
+import android.util.Log
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import kotlin.coroutines.resume
 
 class DocumentsActivity : AppCompatActivity() {
 
@@ -34,7 +40,7 @@ class DocumentsActivity : AppCompatActivity() {
     private lateinit var adapter: DocumentAdapter
 
     private val documents = mutableListOf<File>()
-    private lateinit var searchInput: android.widget.EditText
+    private lateinit var searchInput: EditText
     private val allDocuments = mutableListOf<File>()      // полный список
     private var sortByName = false
     private var searchJob: kotlinx.coroutines.Job? = null
@@ -105,15 +111,23 @@ class DocumentsActivity : AppCompatActivity() {
         binding.backButton.setOnClickListener { finish() }
 
         binding.sortButton.setOnClickListener {
-            val options = arrayOf("📅 По дате", "🔤 По имени")
+            val options = arrayOf(
+                getString(R.string.docs_sort_by_date),
+                getString(R.string.docs_sort_by_name)
+            )
             AlertDialog.Builder(this)
-                .setTitle("Сортировка")
+                .setTitle(getString(R.string.docs_sort_title))
                 .setItems(options) { _, which ->
                     sortByName = which == 1
                     sortDocuments()
                 }
                 .show()
         }
+
+        binding.reindexButton.setOnClickListener {
+            reindexAllDocuments()
+        }
+
         searchInput.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
@@ -144,30 +158,33 @@ class DocumentsActivity : AppCompatActivity() {
      * Фильтрует список по запросу. Использует индексы текстов для поиска.
      */
     private fun applyFilter(query: String) {
-        // Отменяем предыдущий поиск (если пользователь быстро печатает)
         searchJob?.cancel()
 
         searchJob = lifecycleScope.launch {
             val trimmed = query.trim()
 
-            // Дебаунс: ждём 300мс, если пользователь продолжает печатать — отмена
             delay(300)
 
-            val result: List<File> = if (trimmed.isBlank()) {
-                allDocuments.toList()
+            val result: List<File>
+            val counts: Map<String, Int>
+
+            if (trimmed.isBlank()) {
+                result = allDocuments.toList()
+                counts = emptyMap()
             } else {
-                withContext(Dispatchers.IO) {
-                    val matches = FileManager.searchInIndices(this@DocumentsActivity, trimmed)
-                    allDocuments.filter { it.name in matches.keys }
-                        .sortedByDescending { matches[it.name] ?: 0 }
+                val matches = withContext(Dispatchers.IO) {
+                    FileManager.searchInIndices(this@DocumentsActivity, trimmed)
                 }
+                counts = matches
+                result = allDocuments.filter { it.name in matches.keys }
+                    .sortedByDescending { matches[it.name] ?: 0 }
             }
 
-            // Проверяем, что активити жива и пользователь не отменил
             if (isFinishing || isDestroyed) return@launch
 
             documents.clear()
             documents.addAll(result)
+            adapter.setMatchCounts(counts)
             sortDocuments()
             updateEmptyState()
         }
@@ -190,18 +207,148 @@ class DocumentsActivity : AppCompatActivity() {
         binding.documentsRecyclerView.visibility = if (isEmpty) View.GONE else View.VISIBLE
 
         binding.emptyState.text = if (isEmpty && hasQuery) {
-            "Ничего не найдено"
+            getString(R.string.docs_empty_search)
         } else {
-            "Нет документов"
+            getString(R.string.docs_empty)
+        }
+    }
+
+    private fun reindexAllDocuments() {
+        val pdfsWithoutIndex = allDocuments.filter { file ->
+            FileManager.getIndexForPdf(this, file.name) == null
+        }
+
+        if (pdfsWithoutIndex.isEmpty()) {
+            Toast.makeText(this, getString(R.string.docs_reindex_all_done), Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.docs_reindex_title))
+            .setMessage(getString(R.string.docs_reindex_message, pdfsWithoutIndex.size))
+            .setPositiveButton(getString(R.string.docs_reindex_start)) { _, _ ->
+                runReindexing(pdfsWithoutIndex)
+            }
+            .setNegativeButton(getString(R.string.common_cancel), null)
+            .show()
+    }
+
+    private fun runReindexing(files: List<File>) {
+        val progressDialog = android.app.ProgressDialog(this).apply {
+            setTitle(getString(R.string.docs_reindex_progress_title))
+            setMessage(getString(R.string.docs_reindex_progress, 0, files.size))
+            setCancelable(false)
+            show()
+        }
+
+        lifecycleScope.launch {
+            var done = 0
+            var success = 0
+
+            for (file in files) {
+                val ok = withContext(Dispatchers.IO) {
+                    indexSinglePdf(file)
+                }
+                if (ok) success++
+                done++
+                withContext(Dispatchers.Main) {
+                    progressDialog.setMessage(getString(R.string.docs_reindex_progress, done, files.size))
+                }
+            }
+
+            progressDialog.dismiss()
+            Toast.makeText(
+                this@DocumentsActivity,
+                getString(R.string.docs_reindex_result, success, files.size),
+                Toast.LENGTH_LONG
+            ).show()
+
+            loadDocuments()
+        }
+    }
+
+    /**
+     * Обрабатывает один PDF: рендерит первую страницу, распознаёт текст, сохраняет индекс.
+     * Возвращает true при успехе.
+     */
+    private suspend fun indexSinglePdf(file: File): Boolean {
+        return try {
+            val text = extractTextFromPdf(file) ?: return false
+            if (text.isBlank()) return false
+            FileManager.saveIndexForPdf(this, file.name, text)
+            true
+        } catch (e: Exception) {
+            Log.e("DocumentsActivity", "indexSinglePdf error", e)
+            false
+        }
+    }
+
+    /**
+     * Открывает PDF через PdfRenderer, рендерит первую страницу в Bitmap,
+     * прогоняет через ML Kit OCR, возвращает распознанный текст.
+     */
+    private suspend fun extractTextFromPdf(file: File): String? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val pfd = android.os.ParcelFileDescriptor.open(
+                    file,
+                    android.os.ParcelFileDescriptor.MODE_READ_ONLY
+                )
+                val renderer = android.graphics.pdf.PdfRenderer(pfd)
+                try {
+                    if (renderer.pageCount == 0) return@withContext null
+
+                    val page = renderer.openPage(0)
+                    try {
+                        val bitmap = Bitmap.createBitmap(
+                            page.width * 2,
+                            page.height * 2,
+                            Bitmap.Config.ARGB_8888
+                        )
+                        // Белый фон — иначе прозрачность даст чёрный в OCR
+                        val canvas = android.graphics.Canvas(bitmap)
+                        canvas.drawColor(Color.WHITE)
+                        page.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+
+                        // OCR
+                        val image = InputImage.fromBitmap(bitmap, 0)
+                        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+
+                        val result = kotlinx.coroutines.suspendCancellableCoroutine<String?> { cont ->
+                            recognizer.process(image)
+                                .addOnSuccessListener { visionText ->
+                                    cont.resume(visionText.text)
+                                }
+                                .addOnFailureListener {
+                                    cont.resume(null)
+                                }
+                        }
+
+                        recognizer.close()
+                        bitmap.recycle()
+                        page.close()
+                        result
+                    } catch (e: Exception) {
+                        Log.e("DocumentsActivity", "render page error", e)
+                        null
+                    }
+                } finally {
+                    renderer.close()
+                    pfd.close()
+                }
+            } catch (e: Exception) {
+                Log.e("DocumentsActivity", "extractTextFromPdf error", e)
+                null
+            }
         }
     }
 
     private fun showDocumentMenu(file: File) {
         val options = arrayOf(
-            "📂 Открыть PDF",
-            "📤 Поделиться",
-            "✏️ Переименовать",
-            "🗑 Удалить"
+            getString(R.string.docs_menu_open),
+            getString(R.string.docs_menu_share),
+            getString(R.string.docs_menu_rename),
+            getString(R.string.docs_menu_delete)
         )
 
         AlertDialog.Builder(this)
@@ -228,7 +375,7 @@ class DocumentsActivity : AppCompatActivity() {
         )
 
         if (!thumbnailFile.exists()) {
-            Toast.makeText(this, "Миниатюра не найдена", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.docs_thumbnail_missing), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -261,7 +408,6 @@ class DocumentsActivity : AppCompatActivity() {
         DocumentActions.openPdf(this, file)
     }
 
-
     private fun sharePdf(file: File) {
         DocumentActions.sharePdf(this, file)
     }
@@ -271,18 +417,17 @@ class DocumentsActivity : AppCompatActivity() {
         input.setText(file.nameWithoutExtension)
 
         AlertDialog.Builder(this)
-            .setTitle("Переименовать")
+            .setTitle(getString(R.string.docs_rename_title))
             .setView(input)
-            .setPositiveButton("Сохранить") { _, _ ->
+            .setPositiveButton(getString(R.string.docs_rename_save)) { _, _ ->
                 val newName = input.text.toString().trim()
                 if (newName.isEmpty()) {
-                    Toast.makeText(this, "Имя не может быть пустым", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, getString(R.string.docs_rename_empty), Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
-                // Проверка недопустимых символов
                 val forbiddenChars = charArrayOf('/', '\\', ':', '*', '?', '"', '<', '>', '|')
                 if (newName.any { it in forbiddenChars }) {
-                    Toast.makeText(this, "Недопустимые символы в имени", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, getString(R.string.docs_rename_forbidden), Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
                 if (newName == file.nameWithoutExtension) {
@@ -291,11 +436,10 @@ class DocumentsActivity : AppCompatActivity() {
 
                 val newFile = File(file.parentFile, "$newName.pdf")
                 if (newFile.exists()) {
-                    Toast.makeText(this, "Файл с таким именем уже существует", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, getString(R.string.docs_rename_exists), Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
 
-                // Выполняем переименование в фоне
                 lifecycleScope.launch {
                     val success = withContext(Dispatchers.IO) {
                         if (file.renameTo(newFile)) {
@@ -310,26 +454,23 @@ class DocumentsActivity : AppCompatActivity() {
                             if (oldThumb.exists()) {
                                 oldThumb.renameTo(newThumb)
                             }
-                            // Переименовываем индекс
                             FileManager.renameIndexForPdf(
                                 this@DocumentsActivity,
                                 file.name,
                                 newFile.name
                             )
                             true
-                        } else {
-                            false
-                        }
+                        } else false
                     }
                     if (success) {
-                        Toast.makeText(this@DocumentsActivity, "✅ Переименовано", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@DocumentsActivity, getString(R.string.docs_renamed), Toast.LENGTH_SHORT).show()
                         loadDocuments()
                     } else {
-                        Toast.makeText(this@DocumentsActivity, "Ошибка переименования", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@DocumentsActivity, getString(R.string.docs_rename_error), Toast.LENGTH_SHORT).show()
                     }
                 }
             }
-            .setNegativeButton("Отмена", null)
+            .setNegativeButton(getString(R.string.common_cancel), null)
             .show()
     }
 
@@ -343,16 +484,15 @@ class DocumentsActivity : AppCompatActivity() {
                 )
                 val thumbDeleted = if (thumbFile.exists()) thumbFile.delete() else true
 
-                // Удаляем индекс
                 FileManager.deleteIndexForPdf(this@DocumentsActivity, file.name)
 
                 pdfDeleted && thumbDeleted
             }
             if (success) {
-                Toast.makeText(this@DocumentsActivity, "🗑 Удалено", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@DocumentsActivity, getString(R.string.docs_deleted), Toast.LENGTH_SHORT).show()
                 loadDocuments()
             } else {
-                Toast.makeText(this@DocumentsActivity, "Ошибка удаления", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@DocumentsActivity, getString(R.string.docs_delete_error), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -380,6 +520,12 @@ class DocumentAdapter(
 ) : RecyclerView.Adapter<DocumentAdapter.DocumentViewHolder>() {
 
     private val dateFormatter = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault())
+    private var matchCounts: Map<String, Int> = emptyMap()
+
+    fun setMatchCounts(counts: Map<String, Int>) {
+        matchCounts = counts
+        notifyDataSetChanged()
+    }
 
     class DocumentViewHolder(val binding: ItemDocumentBinding) :
         RecyclerView.ViewHolder(binding.root) {
@@ -387,6 +533,7 @@ class DocumentAdapter(
         val title: TextView = binding.documentTitle
         val date: TextView = binding.documentDate
         val menuButton: ImageView = binding.menuButton
+        val matchCount: TextView = binding.matchCount
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): DocumentViewHolder {
@@ -403,15 +550,20 @@ class DocumentAdapter(
         holder.title.text = file.nameWithoutExtension
         holder.date.text = dateFormatter.format(Date(file.lastModified()))
 
+        // Количество совпадений
+        val count = matchCounts[file.name] ?: 0
+        if (count > 0) {
+            holder.matchCount.text = holder.itemView.context.getString(R.string.docs_match_count, count)
+            holder.matchCount.visibility = View.VISIBLE
+        } else {
+            holder.matchCount.visibility = View.GONE
+        }
+
         val thumbnailFile = File(
             file.parentFile?.parentFile,
             "Thumbnails/${file.nameWithoutExtension}_thumb.jpg"
         )
 
-        // Glide автоматически:
-        // - управляет памятью (кэширует, освобождает)
-        // - загружает с уменьшением
-        // - не вызывает утечек
         Glide.with(holder.itemView.context)
             .load(thumbnailFile)
             .placeholder(R.drawable.placeholder_pdf)
@@ -430,10 +582,7 @@ class DocumentAdapter(
     override fun getItemCount() = documents.size
 
     override fun onViewRecycled(holder: DocumentViewHolder) {
-        // Очищаем Glide для этого ViewHolder
         Glide.with(holder.itemView.context).clear(holder.thumbnail)
         super.onViewRecycled(holder)
     }
-
-    // Убрано: onDetachedFromRecyclerView с clearMemory(), чтобы не очищать весь кэш Glide
 }

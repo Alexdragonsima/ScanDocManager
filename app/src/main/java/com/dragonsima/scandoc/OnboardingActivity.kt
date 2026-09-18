@@ -3,10 +3,10 @@ package com.dragonsima.scandoc
 import android.content.Intent
 import android.os.Bundle
 import android.widget.Button
+import androidx.annotation.StringRes
 import androidx.appcompat.app.AppCompatActivity
 import androidx.viewpager2.widget.ViewPager2
 import androidx.viewpager2.widget.ViewPager2.OnPageChangeCallback
-import com.google.android.material.tabs.TabLayoutMediator
 
 class OnboardingActivity : AppCompatActivity() {
 
@@ -17,18 +17,18 @@ class OnboardingActivity : AppCompatActivity() {
     private val pages = listOf(
         OnboardingPage(
             icon = "📄",
-            title = "Сканируйте документы",
-            description = "Мгновенное сканирование с автоматическим определением границ"
+            titleRes = R.string.onboarding_page1_title,
+            descRes = R.string.onboarding_page1_desc
         ),
         OnboardingPage(
             icon = "🔍",
-            title = "Распознавайте текст",
-            description = "OCR-распознавание на русском и английском"
+            titleRes = R.string.onboarding_page2_title,
+            descRes = R.string.onboarding_page2_desc
         ),
         OnboardingPage(
             icon = "☁️",
-            title = "Делитесь и храните",
-            description = "Экспорт в Google Drive, защита PDF паролем"
+            titleRes = R.string.onboarding_page3_title,
+            descRes = R.string.onboarding_page3_desc
         )
     )
 
@@ -62,10 +62,15 @@ class OnboardingActivity : AppCompatActivity() {
         skipButton.setOnClickListener {
             finishOnboarding()
         }
+        skipButton.text = getString(R.string.onboarding_skip)
 
         viewPager.registerOnPageChangeCallback(object : OnPageChangeCallback() {
             override fun onPageSelected(position: Int) {
-                nextButton.text = if (position == pages.size - 1) "🚀 Начать" else "Далее →"
+                nextButton.text = if (position == pages.size - 1) {
+                    getString(R.string.onboarding_start)
+                } else {
+                    getString(R.string.onboarding_next)
+                }
             }
         })
     }
@@ -81,6 +86,6 @@ class OnboardingActivity : AppCompatActivity() {
 
 data class OnboardingPage(
     val icon: String,
-    val title: String,
-    val description: String
+    @StringRes val titleRes: Int,
+    @StringRes val descRes: Int
 )

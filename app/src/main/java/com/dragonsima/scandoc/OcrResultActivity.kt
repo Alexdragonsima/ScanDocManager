@@ -43,31 +43,31 @@ class OcrResultActivity : AppCompatActivity() {
         val words = text.split(Regex("\\s+")).filter { it.isNotBlank() }.size
         val lines = text.lines().size
 
-        statsText.text = "Символов: $chars  ·  Без пробелов: $charsNoSpaces  ·  Слов: $words  ·  Строк: $lines"
+        statsText.text = getString(R.string.ocr_stats, chars, charsNoSpaces, words, lines)
 
         findViewById<View>(R.id.backButton).setOnClickListener { finish() }
 
         findViewById<View>(R.id.copyAllButton).setOnClickListener {
             if (text.isBlank()) {
-                Toast.makeText(this, "Текст пуст", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.ocr_empty), Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            clipboard.setPrimaryClip(ClipData.newPlainText("Распознанный текст", text))
-            Toast.makeText(this, "Текст скопирован", Toast.LENGTH_SHORT).show()
+            clipboard.setPrimaryClip(ClipData.newPlainText(getString(R.string.ocr_title), text))
+            Toast.makeText(this, getString(R.string.ocr_copied), Toast.LENGTH_SHORT).show()
         }
 
         findViewById<View>(R.id.shareTextButton).setOnClickListener {
             if (text.isBlank()) {
-                Toast.makeText(this, "Текст пуст", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.ocr_empty), Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
                 putExtra(Intent.EXTRA_TEXT, text)
-                putExtra(Intent.EXTRA_SUBJECT, "Распознанный текст")
+                putExtra(Intent.EXTRA_SUBJECT, getString(R.string.ocr_share_subject))
             }
-            startActivity(Intent.createChooser(shareIntent, "Поделиться текстом"))
+            startActivity(Intent.createChooser(shareIntent, getString(R.string.ocr_share_title)))
         }
     }
 }
