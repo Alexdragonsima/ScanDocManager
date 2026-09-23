@@ -1,13 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <style name="Theme.ScanDoc" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <style name="Theme.ScanDoc" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Тёмная тема — M3 -->
         <item name="colorPrimary">#818CF8</item>
-        <item name="colorPrimaryDark">#6366F1</item>
-        <item name="colorAccent">#FBBF24</item>
-        <item name="android:windowBackground">#0D1117</item>
+        <item name="colorOnPrimary">#1E1B4B</item>
+        <item name="colorPrimaryContainer">#3730A3</item>
+        <item name="colorOnPrimaryContainer">#E0E7FF</item>
+
+        <item name="colorSecondary">#A5B4FC</item>
+        <item name="colorOnSecondary">#1E1B4B</item>
+
         <item name="colorSurface">#161B22</item>
         <item name="colorOnSurface">#F0F6FC</item>
-        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSurfaceVariant">#21262D</item>
+        <item name="colorOnSurfaceVariant">#8B949E</item>
+
+        <item name="colorOutline">#30363D</item>
+        <item name="colorOutlineVariant">#21262D</item>
+
+        <item name="colorError">#F87171</item>
+        <item name="colorOnError">#450A0A</item>
+
+        <item name="android:colorBackground">#0D1117</item>
+        <item name="colorOnBackground">#F0F6FC</item>
+
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar" tools:targetApi="m">false</item>
     </style>
 
 </resources>

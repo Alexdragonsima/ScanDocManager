@@ -4,9 +4,12 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:layout_marginBottom="8dp"
+    android:foreground="?attr/selectableItemBackground"
+    app:cardBackgroundColor="?attr/colorSurface"
     app:cardCornerRadius="14dp"
-    app:cardElevation="2dp"
-    app:cardBackgroundColor="@color/surface">
+    app:cardElevation="1dp"
+    app:strokeColor="?attr/colorOutlineVariant"
+    app:strokeWidth="1dp">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -14,6 +17,14 @@
         android:orientation="horizontal"
         android:padding="12dp"
         android:gravity="center_vertical">
+
+        <com.google.android.material.checkbox.MaterialCheckBox
+            android:id="@+id/selectionCheckbox"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="4dp"
+            android:focusable="false"
+            android:visibility="gone" />
 
         <ImageView
             android:id="@+id/thumbnailImage"
@@ -36,14 +47,14 @@
                 android:layout_height="wrap_content"
                 android:textSize="15sp"
                 android:textStyle="bold"
-                android:textColor="@color/text_primary"/>
+                android:textColor="?attr/colorOnSurface"/>
 
             <TextView
                 android:id="@+id/documentDate"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:textSize="11sp"
-                android:textColor="@color/text_secondary"/>
+                android:textColor="?attr/colorOnSurfaceVariant"/>
 
             <TextView
                 android:id="@+id/matchCount"
@@ -51,7 +62,7 @@
                 android:layout_height="wrap_content"
                 android:textSize="11sp"
                 android:textStyle="bold"
-                android:textColor="@color/primary_color"
+                android:textColor="?attr/colorPrimary"
                 android:layout_marginTop="2dp"
                 android:visibility="gone" />
         </LinearLayout>

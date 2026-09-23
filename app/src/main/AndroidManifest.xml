@@ -10,6 +10,7 @@
     <uses-feature android:name="android.hardware.camera.any" android:required="true" />
 
     <application
+        android:name=".ScanDocApp"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -65,6 +66,11 @@
             android:name=".OcrResultActivity"
             android:exported="false"
             android:label="Распознанный текст" />
+
+        <activity
+            android:name=".AboutActivity"
+            android:exported="false"
+            android:label="@string/about_title" />
     </application>
 
 </manifest>

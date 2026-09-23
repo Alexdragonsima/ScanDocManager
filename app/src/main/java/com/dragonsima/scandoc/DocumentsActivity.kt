@@ -15,6 +15,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.activity.OnBackPressedCallback
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.engine.DiskCacheStrategy
 import com.dragonsima.scandoc.databinding.ActivityDocumentsBinding
@@ -45,6 +46,11 @@ class DocumentsActivity : AppCompatActivity() {
     private var sortByName = false
     private var searchJob: kotlinx.coroutines.Job? = null
 
+    private var inSelectionMode = false
+    private lateinit var normalTopBar: View
+    private lateinit var selectionTopBar: View
+    private lateinit var selectionCountText: TextView
+
     // Диалог увеличенной миниатюры
     private var enlargedDialog: android.app.Dialog? = null
 
@@ -52,6 +58,9 @@ class DocumentsActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityDocumentsBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        normalTopBar = findViewById(R.id.normalTopBar)
+        selectionTopBar = findViewById(R.id.selectionTopBar)
+        selectionCountText = findViewById(R.id.selectionCountText)
         searchInput = findViewById(R.id.searchInput)
 
         sortByName = savedInstanceState?.getBoolean("sortByName", false) ?: false
@@ -60,6 +69,15 @@ class DocumentsActivity : AppCompatActivity() {
         setupListeners()
         // Не вызываем loadDocuments() здесь, так как onResume всегда вызовется после onCreate
         // и загрузит список один раз.
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (inSelectionMode) {
+                    exitSelectionMode()
+                } else {
+                    finish()
+                }
+            }
+        })
     }
 
     override fun onResume() {
@@ -71,8 +89,15 @@ class DocumentsActivity : AppCompatActivity() {
     private fun setupRecyclerView() {
         adapter = DocumentAdapter(
             documents = documents,
-            onClick = { file -> showDocumentMenu(file) },
-            onLongClick = { file -> showEnlargedThumbnail(file) }
+            onClick = { file ->
+                if (inSelectionMode) {
+                    updateSelectionUi()
+                } else {
+                    showDocumentMenu(file)
+                }
+            },
+            onLongClick = { file -> enterSelectionMode(file) },
+            onCheckChanged = { _, _ -> updateSelectionUi() }
         )
         binding.documentsRecyclerView.layoutManager = LinearLayoutManager(this)
         binding.documentsRecyclerView.adapter = adapter
@@ -108,7 +133,9 @@ class DocumentsActivity : AppCompatActivity() {
     }
 
     private fun setupListeners() {
-        binding.backButton.setOnClickListener { finish() }
+        findViewById<View>(R.id.backButton).setOnClickListener {
+            if (inSelectionMode) exitSelectionMode() else finish()
+        }
 
         binding.sortButton.setOnClickListener {
             val options = arrayOf(
@@ -135,6 +162,23 @@ class DocumentsActivity : AppCompatActivity() {
                 applyFilter(s?.toString().orEmpty())
             }
         })
+
+        findViewById<View>(R.id.cancelSelectionButton).setOnClickListener {
+            exitSelectionMode()
+        }
+
+        findViewById<View>(R.id.selectAllButton).setOnClickListener {
+            adapter.selectAll()
+            updateSelectionUi()
+        }
+
+        findViewById<View>(R.id.shareSelectedButton).setOnClickListener {
+            shareSelected()
+        }
+
+        findViewById<View>(R.id.deleteSelectedButton).setOnClickListener {
+            confirmDeleteSelected()
+        }
     }
 
     private fun loadDocuments() {
@@ -151,6 +195,80 @@ class DocumentsActivity : AppCompatActivity() {
 
             // Применяем текущий фильтр (если есть)
             applyFilter(searchInput.text?.toString().orEmpty())
+        }
+    }
+
+    // ==================== РЕЖИМ ВЫДЕЛЕНИЯ ====================
+
+    private fun enterSelectionMode(firstFile: File) {
+        inSelectionMode = true
+        adapter.setSelectionMode(true)
+        adapter.clearSelection()
+        // Не выделяем сразу — пользователь сам тапнет, но подсказываем через долгий тап
+        adapter.notifyDataSetChanged()
+        normalTopBar.visibility = View.GONE
+        selectionTopBar.visibility = View.VISIBLE
+        updateSelectionUi()
+    }
+
+    private fun exitSelectionMode() {
+        inSelectionMode = false
+        adapter.setSelectionMode(false)
+        normalTopBar.visibility = View.VISIBLE
+        selectionTopBar.visibility = View.GONE
+    }
+
+    private fun updateSelectionUi() {
+        val count = adapter.getSelectedFiles().size
+        selectionCountText.text = getString(R.string.docs_selected_count, count)
+        findViewById<View>(R.id.shareSelectedButton).isEnabled = count > 0
+        findViewById<View>(R.id.deleteSelectedButton).isEnabled = count > 0
+    }
+
+    private fun shareSelected() {
+        val files = adapter.getSelectedFiles()
+        if (files.isEmpty()) return
+        DocumentActions.shareMultiplePdfs(this, files)
+        exitSelectionMode()
+    }
+
+    private fun confirmDeleteSelected() {
+        val files = adapter.getSelectedFiles()
+        if (files.isEmpty()) return
+
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.docs_delete_selected_title))
+            .setMessage(getString(R.string.docs_delete_selected_message, files.size))
+            .setPositiveButton(getString(R.string.common_delete)) { _, _ ->
+                deleteMultipleFiles(files)
+            }
+            .setNegativeButton(getString(R.string.common_cancel), null)
+            .show()
+    }
+
+    private fun deleteMultipleFiles(files: List<File>) {
+        lifecycleScope.launch {
+            val deleted = withContext(Dispatchers.IO) {
+                var count = 0
+                files.forEach { file ->
+                    val pdfDeleted = file.delete()
+                    val thumbFile = File(
+                        file.parentFile?.parentFile,
+                        "Thumbnails/${file.nameWithoutExtension}_thumb.jpg"
+                    )
+                    if (thumbFile.exists()) thumbFile.delete()
+                    FileManager.deleteIndexForPdf(this@DocumentsActivity, file.name)
+                    if (pdfDeleted) count++
+                }
+                count
+            }
+            Toast.makeText(
+                this@DocumentsActivity,
+                getString(R.string.docs_deleted_count, deleted),
+                Toast.LENGTH_SHORT
+            ).show()
+            exitSelectionMode()
+            loadDocuments()
         }
     }
 
@@ -347,6 +465,7 @@ class DocumentsActivity : AppCompatActivity() {
         val options = arrayOf(
             getString(R.string.docs_menu_open),
             getString(R.string.docs_menu_share),
+            getString(R.string.docs_menu_thumbnail),
             getString(R.string.docs_menu_rename),
             getString(R.string.docs_menu_delete)
         )
@@ -357,8 +476,9 @@ class DocumentsActivity : AppCompatActivity() {
                 when (which) {
                     0 -> openPdf(file)
                     1 -> sharePdf(file)
-                    2 -> renameFile(file)
-                    3 -> deleteFile(file)
+                    2 -> showEnlargedThumbnail(file)
+                    3 -> renameFile(file)
+                    4 -> deleteFile(file)
                 }
             }
             .show()
@@ -516,14 +636,37 @@ class DocumentsActivity : AppCompatActivity() {
 class DocumentAdapter(
     private val documents: List<File>,
     private val onClick: (File) -> Unit,
-    private val onLongClick: (File) -> Unit
+    private val onLongClick: (File) -> Unit,
+    private val onCheckChanged: (File, Boolean) -> Unit
 ) : RecyclerView.Adapter<DocumentAdapter.DocumentViewHolder>() {
 
-    private val dateFormatter = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault())
+    private val dateFormatter = SimpleDateFormat("d MMM yyyy, HH:mm", Locale.forLanguageTag("ru"))
     private var matchCounts: Map<String, Int> = emptyMap()
+    private val selectedFiles = mutableSetOf<String>()  // имена файлов
+    private var selectionModeInternal = false
+    val selectionMode: Boolean get() = selectionModeInternal
 
     fun setMatchCounts(counts: Map<String, Int>) {
         matchCounts = counts
+        notifyDataSetChanged()
+    }
+
+    fun setSelectionMode(enabled: Boolean) {
+        selectionModeInternal = enabled
+        if (!enabled) selectedFiles.clear()
+        notifyDataSetChanged()
+    }
+
+    fun getSelectedFiles(): List<File> = documents.filter { it.name in selectedFiles }
+
+    fun clearSelection() {
+        selectedFiles.clear()
+        notifyDataSetChanged()
+    }
+
+    fun selectAll() {
+        selectedFiles.clear()
+        documents.forEach { selectedFiles.add(it.name) }
         notifyDataSetChanged()
     }
 
@@ -534,6 +677,7 @@ class DocumentAdapter(
         val date: TextView = binding.documentDate
         val menuButton: ImageView = binding.menuButton
         val matchCount: TextView = binding.matchCount
+        val checkbox: com.google.android.material.checkbox.MaterialCheckBox = binding.selectionCheckbox
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): DocumentViewHolder {
@@ -550,9 +694,8 @@ class DocumentAdapter(
         holder.title.text = file.nameWithoutExtension
         holder.date.text = dateFormatter.format(Date(file.lastModified()))
 
-        // Количество совпадений
         val count = matchCounts[file.name] ?: 0
-        if (count > 0) {
+        if (count > 0 && !selectionMode) {
             holder.matchCount.text = holder.itemView.context.getString(R.string.docs_match_count, count)
             holder.matchCount.visibility = View.VISIBLE
         } else {
@@ -563,19 +706,49 @@ class DocumentAdapter(
             file.parentFile?.parentFile,
             "Thumbnails/${file.nameWithoutExtension}_thumb.jpg"
         )
-
         Glide.with(holder.itemView.context)
             .load(thumbnailFile)
             .placeholder(R.drawable.placeholder_pdf)
             .diskCacheStrategy(DiskCacheStrategy.ALL)
             .into(holder.thumbnail)
 
-        holder.thumbnail.setOnLongClickListener {
-            onLongClick(file)
-            true
+        // Чекбокс
+        if (selectionMode) {
+            holder.checkbox.visibility = View.VISIBLE
+            holder.checkbox.isChecked = file.name in selectedFiles
+        } else {
+            holder.checkbox.visibility = View.GONE
         }
 
-        holder.itemView.setOnClickListener { onClick(file) }
+        holder.itemView.setOnClickListener {
+            if (selectionMode) {
+                val newState = file.name !in selectedFiles
+                if (newState) selectedFiles.add(file.name) else selectedFiles.remove(file.name)
+                holder.checkbox.isChecked = newState
+                onCheckChanged(file, newState)
+            } else {
+                onClick(file)
+            }
+        }
+
+        holder.itemView.setOnLongClickListener {
+            if (!selectionMode) {
+                onLongClick(file)
+                true
+            } else false
+        }
+
+        holder.checkbox.setOnClickListener {
+            // Чекбокс уже переключён системой — синхронизируем Set
+            if (holder.checkbox.isChecked) {
+                selectedFiles.add(file.name)
+            } else {
+                selectedFiles.remove(file.name)
+            }
+            onCheckChanged(file, holder.checkbox.isChecked)
+        }
+
+        holder.menuButton.visibility = if (selectionMode) View.GONE else View.VISIBLE
         holder.menuButton.setOnClickListener { onClick(file) }
     }
 

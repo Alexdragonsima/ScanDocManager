@@ -16,17 +16,17 @@ class OnboardingActivity : AppCompatActivity() {
 
     private val pages = listOf(
         OnboardingPage(
-            icon = "📄",
+            iconRes = R.drawable.ic_camera,
             titleRes = R.string.onboarding_page1_title,
             descRes = R.string.onboarding_page1_desc
         ),
         OnboardingPage(
-            icon = "🔍",
+            iconRes = R.drawable.ic_search,
             titleRes = R.string.onboarding_page2_title,
             descRes = R.string.onboarding_page2_desc
         ),
         OnboardingPage(
-            icon = "☁️",
+            iconRes = R.drawable.ic_cloud,
             titleRes = R.string.onboarding_page3_title,
             descRes = R.string.onboarding_page3_desc
         )
@@ -85,7 +85,7 @@ class OnboardingActivity : AppCompatActivity() {
 }
 
 data class OnboardingPage(
-    val icon: String,
+    val iconRes: Int,
     @StringRes val titleRes: Int,
     @StringRes val descRes: Int
 )

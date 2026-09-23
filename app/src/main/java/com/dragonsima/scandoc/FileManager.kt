@@ -2,7 +2,6 @@ package com.dragonsima.scandoc
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.pdf.PdfDocument
 import android.util.Log
 import org.opencv.android.Utils
@@ -51,16 +50,24 @@ object FileManager {
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         val pdfFile = File(context.filesDir, "$DOCUMENTS_FOLDER/$timestamp.pdf")
 
-        val bitmap = matToBitmap(image)   // может выбросить исключение
+        val quality = getPdfQuality(context)
+        // ← уменьшаем Mat, а не Bitmap
+        val resizedMat = prepareMatForPdf(image, quality)
+        // ← большая bitmap создаётся ТОЛЬКО из уменьшенного Mat
+        val bitmap = matToBitmap(resizedMat)
+        resizedMat.release()
+
+        // Миниатюру делаем из полного image — она всё равно 200x260
+        val thumbSource = matToBitmap(image)
+
         try {
             val pdfDocument = PdfDocument()
-            val pageWidth = 595   // A4 ширина в точках
-            val pageHeight = 842  // A4 высота в точках
+            val pageWidth = 595
+            val pageHeight = 842
             val pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, 1).create()
             val page = pdfDocument.startPage(pageInfo)
             val canvas = page.canvas
 
-            // Масштабируем с сохранением пропорций
             val scale = min(pageWidth.toFloat() / bitmap.width, pageHeight.toFloat() / bitmap.height)
             val scaledBitmap = Bitmap.createScaledBitmap(
                 bitmap,
@@ -77,16 +84,15 @@ object FileManager {
             FileOutputStream(pdfFile).use { pdfDocument.writeTo(it) }
             pdfDocument.close()
 
-            // Миниатюру сохраняем до освобождения bitmap (используем исходный bitmap)
-            saveThumbnail(context, bitmap, timestamp)
-
+            saveThumbnail(context, thumbSource, timestamp)
             scaledBitmap.recycle()
         } catch (e: Exception) {
             Log.e(TAG, "Ошибка при сохранении PDF", e)
-            pdfFile.delete()  // удаляем битый файл
+            pdfFile.delete()
             throw e
         } finally {
             bitmap.recycle()
+            thumbSource.recycle()
         }
 
         Log.d(TAG, "PDF сохранён: ${pdfFile.absolutePath}")
@@ -104,7 +110,13 @@ object FileManager {
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         val pdfFile = File(context.filesDir, "$DOCUMENTS_FOLDER/$timestamp.pdf")
 
-        val bitmap = matToBitmap(image)
+        val quality = getPdfQuality(context)
+        val resizedMat = prepareMatForPdf(image, quality)
+        val bitmap = matToBitmap(resizedMat)
+        resizedMat.release()
+
+        val thumbSource = matToBitmap(image)
+
         try {
             val pdfDocument = PdfDocument()
             val pageWidth = 595
@@ -113,7 +125,6 @@ object FileManager {
             val page = pdfDocument.startPage(pageInfo)
             val canvas = page.canvas
 
-            // Та же трансформация, что и в saveToPdf — общая для картинки и текста
             val scale = min(pageWidth.toFloat() / bitmap.width, pageHeight.toFloat() / bitmap.height)
             val scaledWidth = (bitmap.width * scale).toInt()
             val scaledHeight = (bitmap.height * scale).toInt()
@@ -123,15 +134,8 @@ object FileManager {
 
             canvas.drawBitmap(scaledBitmap, x, y, null)
 
-            // Невидимый текстовый слой поверх картинки
             if (visionText != null) {
-                drawInvisibleText(
-                    canvas = canvas,
-                    visionText = visionText,
-                    scale = scale,
-                    offsetX = x,
-                    offsetY = y
-                )
+                drawInvisibleText(canvas, visionText, scale, x, y)
             }
 
             pdfDocument.finishPage(page)
@@ -139,8 +143,7 @@ object FileManager {
             FileOutputStream(pdfFile).use { pdfDocument.writeTo(it) }
             pdfDocument.close()
 
-            // Миниатюра — как в обычном saveToPdf
-            saveThumbnail(context, bitmap, timestamp)
+            saveThumbnail(context, thumbSource, timestamp)
             scaledBitmap.recycle()
         } catch (e: Exception) {
             Log.e(TAG, "Ошибка при сохранении PDF с текстом", e)
@@ -148,6 +151,7 @@ object FileManager {
             throw e
         } finally {
             bitmap.recycle()
+            thumbSource.recycle()
         }
 
         Log.d(TAG, "PDF с текстовым слоем сохранён: ${pdfFile.absolutePath}")
@@ -213,6 +217,8 @@ object FileManager {
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         val pdfFile = File(context.filesDir, "$DOCUMENTS_FOLDER/batch_$timestamp.pdf")
 
+        val quality = getPdfQuality(context)
+
         val pdfDocument = PdfDocument()
         try {
             pages.forEachIndexed { index, page ->
@@ -235,7 +241,7 @@ object FileManager {
                 }
 
                 try {
-                    renderPage(pdfDocument, localMat, page.visionText, index + 1)
+                    renderPage(pdfDocument, localMat, page.visionText, index + 1, quality)
                 } finally {
                     if (needsRelease) localMat.release()
                 }
@@ -267,8 +273,9 @@ object FileManager {
     private fun renderPage(
         pdfDocument: PdfDocument,
         image: Mat,
-        visionText: com.google.mlkit.vision.text.Text?,
-        pageNumber: Int
+        visionText:Text?,
+        pageNumber: Int,
+        quality: String
     ) {
         val pageWidth = 595
         val pageHeight = 842
@@ -276,7 +283,11 @@ object FileManager {
         val page = pdfDocument.startPage(pageInfo)
         val canvas = page.canvas
 
-        val bitmap = matToBitmap(image)
+        // ← уменьшаем Mat до создания Bitmap
+        val resizedMat = prepareMatForPdf(image, quality)
+        val bitmap = matToBitmap(resizedMat)
+        resizedMat.release()
+
         try {
             val scale = min(pageWidth.toFloat() / bitmap.width, pageHeight.toFloat() / bitmap.height)
             val scaledWidth = (bitmap.width * scale).toInt()
@@ -318,6 +329,40 @@ object FileManager {
         } finally {
             if (needsConversion) targetMat.release()
         }
+    }
+
+    /**
+     * Читает настройку качества PDF из SharedPreferences.
+     * Возвращает "high" | "medium" | "low".
+     */
+    private fun getPdfQuality(context: Context): String {
+        val prefs = context.getSharedPreferences(SettingsActivity.PREFS_SETTINGS, Context.MODE_PRIVATE)
+        return prefs.getString(SettingsActivity.KEY_PDF_QUALITY, "high") ?: "high"
+    }
+
+
+    /**
+     * Уменьшает Mat в зависимости от качества PDF.
+     * Возвращает НОВЫЙ Mat (или клон исходного, если уменьшение не нужно).
+     * Вызывающий код должен release()'нуть результат.
+     */
+    private fun prepareMatForPdf(source: Mat, quality: String): Mat {
+        val maxSide = when (quality) {
+            "low" -> 1200
+            "medium" -> 2000
+            else -> 3000
+        }
+
+        val longest = maxOf(source.cols(), source.rows())
+        if (longest <= maxSide) return source.clone()
+
+        val scale = maxSide.toDouble() / longest
+        val newW = (source.cols() * scale).toInt().coerceAtLeast(1)
+        val newH = (source.rows() * scale).toInt().coerceAtLeast(1)
+
+        val resized = Mat()
+        Imgproc.resize(source, resized, org.opencv.core.Size(newW.toDouble(), newH.toDouble()), 0.0, 0.0, Imgproc.INTER_AREA)
+        return resized
     }
 
     /**

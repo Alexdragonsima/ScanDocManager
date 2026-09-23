@@ -16,6 +16,14 @@
     <string name="common_loading">Загрузка…</string>
 
     <!-- ============ MainActivity ============ -->
+    <string name="main_greeting">Привет! Готовы сканировать?</string>
+    <string name="main_scan_title">Сканировать документ</string>
+    <string name="main_scan_subtitle">Одностраничный скан</string>
+    <string name="main_multi_title">Многостраничный скан</string>
+    <string name="main_multi_subtitle">Несколько страниц в один PDF</string>
+    <string name="main_recent_title">Мои документы</string>
+    <string name="main_all_documents">Все документы →</string>
+    <string name="main_empty_recent">Отсканируйте первый — он появится здесь</string>
     <string name="main_title">ScanDoc</string>
     <string name="main_status_ready">Готов к сканированию</string>
     <string name="main_status_last_document">Последний документ</string>
@@ -25,8 +33,12 @@
     <string name="main_empty_desc">Нажмите кнопку сканирования, чтобы создать первый документ</string>
     <string name="main_opencv_error">Ошибка загрузки OpenCV. Функция сканирования недоступна.</string>
     <string name="main_opencv_unavailable">OpenCV недоступен</string>
-    <string name="main_saved_toast">✅ Документ сохранён: %s</string>
+    <string name="main_saved_toast">Документ сохранён: %s</string>
     <string name="main_saved_file">файл</string>
+    <string name="main_greeting_morning">Доброе утро! Готовы сканировать?</string>
+    <string name="main_greeting_day">Добрый день! Готовы сканировать?</string>
+    <string name="main_greeting_evening">Добрый вечер! Готовы сканировать?</string>
+    <string name="main_greeting_night">Доброй ночи! Работаем?</string>
 
     <!-- ============ CameraActivity ============ -->
     <string name="camera_no_permission">Нет разрешения на камеру</string>
@@ -38,7 +50,7 @@
     <string name="camera_save_error">Ошибка сохранения</string>
     <string name="camera_no_image">Нет изображения</string>
     <string name="camera_empty_image">Изображение пустое</string>
-    <string name="camera_saved_pdf">✅ Сохранено: %s</string>
+    <string name="camera_saved_pdf">Сохранено: %s</string>
     <string name="camera_save_failed">Ошибка сохранения: %s</string>
     <string name="camera_no_image_to_crop">Нет изображения для обрезки</string>
     <string name="camera_copy_error">Ошибка копирования</string>
@@ -111,15 +123,15 @@
     <string name="docs_empty_search">Ничего не найдено</string>
     <string name="docs_match_count">Совпадений: %d</string>
 
-    <string name="docs_menu_open">📂 Открыть PDF</string>
-    <string name="docs_menu_share">📤 Поделиться</string>
-    <string name="docs_menu_rename">✏️ Переименовать</string>
-    <string name="docs_menu_delete">🗑 Удалить</string>
+    <string name="docs_menu_open">Открыть PDF</string>
+    <string name="docs_menu_share">Поделиться</string>
+    <string name="docs_menu_rename">Переименовать</string>
+    <string name="docs_menu_delete">Удалить</string>
 
     <string name="docs_delete_title">Удалить?</string>
     <string name="docs_delete_message">Документ будет удалён безвозвратно</string>
     <string name="docs_delete_confirm">Удалить</string>
-    <string name="docs_deleted">🗑 Удалено</string>
+    <string name="docs_deleted">Удалено</string>
     <string name="docs_delete_error">Ошибка удаления</string>
 
     <string name="docs_rename_title">Переименовать</string>
@@ -131,10 +143,19 @@
     <string name="docs_rename_error">Ошибка переименования</string>
 
     <string name="docs_sort_title">Сортировка</string>
-    <string name="docs_sort_by_date">📅 По дате</string>
-    <string name="docs_sort_by_name">🔤 По имени</string>
+    <string name="docs_sort_by_date">По дате</string>
+    <string name="docs_sort_by_name">По имени</string>
 
+    <string name="docs_menu_thumbnail">👁 Просмотр миниатюры</string>
     <string name="docs_thumbnail_missing">Миниатюра не найдена</string>
+
+    <string name="docs_selected_count">Выбрано: %d</string>
+    <string name="docs_cancel_selection">Отмена</string>
+    <string name="docs_select_all">Выделить все</string>
+    <string name="docs_delete_selected_title">Удалить выбранные?</string>
+    <string name="docs_delete_selected_message">Будет удалено документов: %d. Действие необратимо.</string>
+    <string name="docs_deleted_count">Удалено: %d</string>
+    <string name="docs_share_multiple_title">Поделиться документами</string>
 
     <!-- Переиндексация -->
     <string name="docs_reindex_title">Переиндексировать?</string>
@@ -170,9 +191,61 @@
     <string name="settings_language">Язык</string>
     <string name="settings_onboarding">Показать обучение снова</string>
 
+    <!-- Settings -->
+    <string name="settings_section_appearance">Внешний вид</string>
+    <string name="settings_section_scan">Сканирование</string>
+    <string name="settings_section_data">Данные</string>
+    <string name="settings_section_app">Приложение</string>
+
+    <string name="settings_theme">Тема</string>
+    <string name="settings_theme_light">Светлая</string>
+    <string name="settings_theme_dark">Тёмная</string>
+    <string name="settings_theme_system">Системная</string>
+    <string name="settings_theme_title">Выбор темы</string>
+
+    <string name="settings_dynamic_colors">Динамические цвета</string>
+    <string name="settings_dynamic_colors_desc">Подстраиваться под обои (Android 12+)</string>
+
+    <string name="settings_default_format">Формат по умолчанию</string>
+    <string name="settings_format_title">Формат сохранения</string>
+
+    <string name="settings_pdf_quality">Качество PDF</string>
+    <string name="settings_pdf_quality_title">Качество</string>
+    <string name="settings_pdf_quality_high">Высокое</string>
+    <string name="settings_pdf_quality_medium">Среднее</string>
+    <string name="settings_pdf_quality_low">Низкое</string>
+
+    <string name="settings_auto_rotate">Автоповорот</string>
+    <string name="settings_auto_rotate_desc">Определять ориентацию документа</string>
+
+    <string name="settings_stats">Статистика</string>
+    <string name="settings_stats_format">%1$d документов · %2$s</string>
+
+    <string name="settings_clear_cache">Очистить кеш</string>
+    <string name="settings_clear_cache_title">Очистить кеш?</string>
+    <string name="settings_clear_cache_message">Будут удалены временные файлы. Документы останутся.</string>
+    <string name="settings_clear_cache_done">Кеш очищен</string>
+
+    <string name="settings_about">О приложении</string>
+    <string name="settings_show_onboarding">Показать обучение снова</string>
+
+
+    <!-- About -->
+    <string name="about_title">О приложении</string>
+    <string name="about_description">ScanDoc — мощный сканер документов с распознаванием текста, работающий полностью на устройстве. Без интернета, без рекламы, без отправки данных на сервер.</string>
+
+    <string name="about_features_title">Возможности</string>
+    <string name="about_features_list">• Автоматическое определение границ документа\n• 7 режимов обработки (Ч/Б, Цветной, Тени, Резкость и др.)\n• Многостраничное сканирование\n• Распознавание текста (OCR) с поиском по содержимому\n• Экспорт в PDF и JPG\n• Светлая и тёмная темы\n• Работа полностью офлайн</string>
+
+    <string name="about_feedback">Обратная связь</string>
+    <string name="about_privacy">Политика конфиденциальности</string>
+    <string name="about_licenses">Лицензии</string>
+    <string name="about_licenses_text">ScanDoc использует следующие библиотеки с открытым исходным кодом:\n\n• OpenCV (Apache License 2.0)\n• ML Kit от Google (Apache License 2.0)\n• Material Components (Apache License 2.0)\n• Glide (BSD, MIT)\n• AndroidX (Apache License 2.0)</string>
+    <string name="about_copyright">© 2026 DragonSima\nВсе права защищены</string>
+
     <!-- ============ OnboardingActivity ============ -->
     <string name="onboarding_next">Далее →</string>
-    <string name="onboarding_start">🚀 Начать</string>
+    <string name="onboarding_start">Начать</string>
     <string name="onboarding_skip">Пропустить</string>
     <string name="onboarding_page1_title">Сканируйте документы</string>
     <string name="onboarding_page1_desc">Мгновенное сканирование с автоматическим определением границ</string>

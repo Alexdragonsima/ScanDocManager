@@ -12,7 +12,7 @@ class OnboardingAdapter(
 ) : RecyclerView.Adapter<OnboardingAdapter.OnboardingViewHolder>() {
 
     class OnboardingViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-        val icon: TextView = view.findViewById(R.id.iconText)
+        val icon: android.widget.ImageView = view.findViewById(R.id.iconText)
         val title: TextView = view.findViewById(R.id.titleText)
         val description: TextView = view.findViewById(R.id.descriptionText)
     }
@@ -24,7 +24,7 @@ class OnboardingAdapter(
 
     override fun onBindViewHolder(holder: OnboardingViewHolder, position: Int) {
         val page = pages[position]
-        holder.icon.text = page.icon
+        holder.icon.setImageResource(page.iconRes)
         holder.title.text = context.getString(page.titleRes)
         holder.description.text = context.getString(page.descRes)
     }

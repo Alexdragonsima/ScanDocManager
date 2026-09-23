@@ -64,7 +64,7 @@ class CameraActivity : AppCompatActivity() {
     // ==================== UI ====================
     private lateinit var previewView: PreviewView
     private lateinit var overlay: OverlayView
-    private lateinit var captureButton: Button
+    private lateinit var captureButton: View
     private lateinit var retakeButton: Button
     private lateinit var cropButton: Button
     private lateinit var retakeLabel: android.widget.TextView
@@ -72,10 +72,17 @@ class CameraActivity : AppCompatActivity() {
     private lateinit var saveResultButton: Button
     private lateinit var actionsLayout: View
     private lateinit var resultImageView: ImageView
-    private lateinit var backButton: Button
+    private lateinit var backButton: android.widget.ImageButton
     private lateinit var progressBar: ProgressBar
     private lateinit var hdrButton: MaterialButton
     private lateinit var aiButton: MaterialButton
+    private var isShowingPages = true
+    private lateinit var pagesHeaderRow: View
+    private lateinit var pagesInlineRecycler: androidx.recyclerview.widget.RecyclerView
+    private lateinit var pagesHeaderTitle: android.widget.TextView
+    private lateinit var togglePagesButton: View
+    private lateinit var actionButtonsRow: View
+    private var pagesAdapter: PageThumbnailAdapter? = null
 
     // ==================== Состояние ====================
     @Volatile
@@ -166,6 +173,7 @@ class CameraActivity : AppCompatActivity() {
         setupFilterButtons()
         initViews()
         setupButtons()
+        applyDefaultFormat()
         if(multiPageMode){
             setupMultiPageUI()
         }
@@ -213,6 +221,12 @@ class CameraActivity : AppCompatActivity() {
         cropButton.visibility = View.GONE
         saveResultButton.visibility = View.GONE
         progressBar.visibility = View.GONE
+
+        pagesHeaderRow = findViewById(R.id.pagesHeaderRow)
+        pagesInlineRecycler = findViewById(R.id.pagesInlineRecycler)
+        pagesHeaderTitle = findViewById(R.id.pagesHeaderTitle)
+        togglePagesButton = findViewById(R.id.togglePagesButton)
+        actionButtonsRow = findViewById(R.id.actionButtonsRow)
     }
 
     private fun setupButtons() {
@@ -220,34 +234,18 @@ class CameraActivity : AppCompatActivity() {
             onBackPressedDispatcher.onBackPressed()
         }
         saveResultButton.setOnClickListener {
-            if (multiPageMode) finishMultiPageSession() else saveDocument()
-        }
-        saveResultButton.setOnLongClickListener {
-            showFormatDialog()
-            true
+            if (multiPageMode) {
+                finishMultiPageSession()
+            } else {
+                val prefs = getSharedPreferences(SettingsActivity.PREFS_SETTINGS, MODE_PRIVATE)
+                val format = prefs.getString(SettingsActivity.KEY_DEFAULT_FORMAT, "pdf") ?: "pdf"
+                if (format == "jpg") saveDocumentAsJpg() else saveDocument()
+            }
         }
         retakeButton.setOnClickListener {
             if (multiPageMode) addCurrentPageToRepository() else retakePicture()
         }
-
-        retakeButton.setOnLongClickListener {
-            if (multiPageMode) {
-                androidx.appcompat.app.AlertDialog.Builder(this@CameraActivity)
-                    .setTitle(getString(R.string.multi_page_dialog_retake_title))
-                    .setMessage(getString(R.string.multi_page_dialog_retake_message))
-                    .setPositiveButton(getString(R.string.multi_page_dialog_retake_confirm)) { _, _ ->
-                        returnToCameraAfterPageAdded()
-                    }
-                    .setNegativeButton(getString(R.string.common_cancel), null)
-                    .show()
-                true
-            } else false
-        }
         cropButton.setOnClickListener { cropDocument() }
-        cropButton.setOnLongClickListener {
-            showRotateDialog()
-            true
-        }
 
         findViewById<View>(R.id.ocrButton).setOnClickListener {
             val mat = baseMat ?: run {
@@ -299,8 +297,59 @@ class CameraActivity : AppCompatActivity() {
             else takePicture()
         }
 
+        // Новая кнопка «⋯» — меню действий
+        findViewById<View>(R.id.menuButton).setOnClickListener {
+            showActionsMenu()
+        }
+
+        // Новая кнопка «Повернуть»
+        findViewById<View>(R.id.rotateButton).setOnClickListener {
+            showRotateDialog()
+        }
+
+        // Новая кнопка «JPG»
+        findViewById<View>(R.id.jpgButton).setOnClickListener {
+            if (multiPageMode) {
+                finishMultiPageAsJpg()
+            } else {
+                // Маленькая кнопка — всегда быстрый экспорт в JPG
+                saveDocumentAsJpg()
+            }
+        }
+
+        findViewById<View>(R.id.menuButton).visibility = View.GONE
+
         hdrEnabled = false
         updateHdrButtonState()
+    }
+
+    /**
+     * Читает настройку формата по умолчанию и обновляет текст большой кнопки.
+     */
+
+    override fun onResume() {
+        super.onResume()
+        // Обновляем текст большой кнопки, если формат поменялся в настройках
+        if (!multiPageMode && baseMat != null) {
+            applyDefaultFormat()
+        }
+    }
+
+    private fun applyDefaultFormat() {
+        val prefs = getSharedPreferences(SettingsActivity.PREFS_SETTINGS, MODE_PRIVATE)
+        val format = prefs.getString(SettingsActivity.KEY_DEFAULT_FORMAT, "pdf") ?: "pdf"
+
+        if (multiPageMode) {
+            // В мультирежиме всегда PDF (JPG тоже можно, но реже)
+            saveResultButton.text = "✅  Завершить и сохранить"
+            return
+        }
+
+        if (format == "jpg") {
+            saveResultButton.text = "Сохранить JPG"
+        } else {
+            saveResultButton.text = "Сохранить PDF"
+        }
     }
 
     private fun setupBackHandler() {
@@ -370,6 +419,59 @@ class CameraActivity : AppCompatActivity() {
                 when (which) {
                     0 -> { if (multiPageMode) finishMultiPageSession() else saveDocument() }
                     1 -> { if (multiPageMode) finishMultiPageAsJpg() else saveDocumentAsJpg() }
+                }
+            }
+            .setNegativeButton(getString(R.string.common_cancel), null)
+            .show()
+    }
+
+    private fun showActionsMenu() {
+        val actions = mutableListOf<String>()
+
+        // HDR
+        actions.add(if (hdrEnabled) "HDR: ВКЛ ✓" else "HDR: ВЫКЛ")
+        // AI-скан
+        actions.add("AI-скан (ML Kit)")
+        // Формат
+        actions.add("Формат сохранения (PDF / JPG)")
+        // Поворот
+        actions.add("Повернуть")
+        // Переснять (в мультирежиме — без сохранения)
+        if (multiPageMode) actions.add("Переснять без сохранения")
+        // Формат PDF / JPG
+        actions.add("Сохранить как...")
+
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Действия")
+            .setItems(actions.toTypedArray()) { _, which ->
+                when (which) {
+                    0 -> {
+                        hdrEnabled = !hdrEnabled
+                        updateHdrButtonState()
+                        Toast.makeText(
+                            this,
+                            if (hdrEnabled) "HDR включён" else "HDR выключен",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    1 -> {
+                        if (isMlKitAvailable()) startMlKitScanner()
+                        else Toast.makeText(this, getString(R.string.mlkit_unavailable_fallback), Toast.LENGTH_SHORT).show()
+                    }
+                    2 -> showFormatDialog()
+                    3 -> showRotateDialog()
+                    4 -> {
+                        // Переснять без сохранения (только мультирежим)
+                        androidx.appcompat.app.AlertDialog.Builder(this)
+                            .setTitle(getString(R.string.multi_page_dialog_retake_title))
+                            .setMessage(getString(R.string.multi_page_dialog_retake_message))
+                            .setPositiveButton(getString(R.string.multi_page_dialog_retake_confirm)) { _, _ ->
+                                returnToCameraAfterPageAdded()
+                            }
+                            .setNegativeButton(getString(R.string.common_cancel), null)
+                            .show()
+                    }
+                    5 -> showFormatDialog()
                 }
             }
             .setNegativeButton(getString(R.string.common_cancel), null)
@@ -501,24 +603,80 @@ class CameraActivity : AppCompatActivity() {
         }
     }
     private fun setupMultiPageUI() {
-        // Меняем иконки
-        saveResultButton.text = "✅"
-        retakeButton.text = "➕"
+        saveResultButton.text = "Завершить и сохранить"
+        retakeButton.text = "Добавить страницу"
 
-        // Меняем подписи
-        retakeLabel.text = "Добавить"
-        saveLabel.text = "Готово"
+        // Инициализация миниатюр
+        pagesAdapter = PageThumbnailAdapter(
+            onPageClick = { position -> showFullPageViewer(position) },
+            onPageLongClick = { position ->
+                androidx.appcompat.app.AlertDialog.Builder(this)
+                    .setTitle("Удалить страницу ${position + 1}?")
+                    .setPositiveButton("Удалить") { _, _ ->
+                        PageRepository.removeAt(position)
+                        refreshPagesList()
+                        updatePageCounter()
+                    }
+                    .setNegativeButton("Отмена", null)
+                    .show()
+            }
+        )
+        pagesInlineRecycler.layoutManager = androidx.recyclerview.widget.LinearLayoutManager(
+            this, androidx.recyclerview.widget.LinearLayoutManager.HORIZONTAL, false
+        )
+        pagesInlineRecycler.adapter = pagesAdapter
 
-        pageCounterText.setOnClickListener {
-            showPageListSheet()
-        }
+        // Переключатель страницы ↔ фильтры
+        togglePagesButton.setOnClickListener { togglePagesView() }
+
+        // По умолчанию — показываем страницы
+        isShowingPages = true
+        applyPagesViewState()
+
         Toast.makeText(
             this,
-            getString(R.string.multi_page_hint),
+            "Короткий тап «Добавить» — новая страница.\nКнопка с ползунками — фильтры.",
             Toast.LENGTH_LONG
         ).show()
+    }
 
-        updatePageCounter()
+    /**
+     * Переключает вид шторки между миниатюрами и фильтрами.
+     */
+    private fun togglePagesView() {
+        isShowingPages = !isShowingPages
+        applyPagesViewState()
+    }
+
+    private fun applyPagesViewState() {
+        if (!multiPageMode) return
+
+        val pagesVis = if (isShowingPages) View.VISIBLE else View.GONE
+        val filtersVis = if (isShowingPages) View.GONE else View.VISIBLE
+
+        pagesHeaderRow.visibility = View.VISIBLE
+        pagesInlineRecycler.visibility = pagesVis
+        findViewById<View>(R.id.filterPanel).visibility = filtersVis
+        actionButtonsRow.visibility = filtersVis
+
+        // Заголовок и иконка меняются
+        if (isShowingPages) {
+            pagesHeaderTitle.text = "Страницы (${PageRepository.getCount()})"
+        } else {
+            pagesHeaderTitle.text = "Фильтры"
+        }
+
+        if (isShowingPages) refreshPagesList()
+    }
+
+    /**
+     * Обновляет список миниатюр страниц.
+     */
+    private fun refreshPagesList() {
+        if (!multiPageMode) return
+        val pages = PageRepository.getAll()
+        pagesAdapter?.submitPages(pages)
+        pagesHeaderTitle.text = "Страницы (${pages.size})"
     }
 
     private fun showPageListSheet() {
@@ -656,20 +814,8 @@ class CameraActivity : AppCompatActivity() {
     }
 
     private fun updatePageCounter() {
-        if (!multiPageMode) {
-            pageCounterText.visibility = View.GONE
-            return
-        }
-
-        val done = PageRepository.getCount()
-        val hasCurrent = baseMat != null
-
-        pageCounterText.text = if (hasCurrent) {
-            getString(R.string.multi_page_shooting, done, done + 1)
-        } else {
-            getString(R.string.multi_page_ready, done)
-        }
-        pageCounterText.visibility = View.VISIBLE
+        // Счётчик убран — информация о страницах показывается в шторке
+        pageCounterText.visibility = View.GONE
     }
 
     private fun updateHdrButtonState() {
@@ -1182,6 +1328,7 @@ class CameraActivity : AppCompatActivity() {
 
         // ← Обновляем счётчик, НЕ скрываем
         updatePageCounter()
+        refreshPagesList()
     }
     /**
      * Мультирежим: собирает все страницы в PDF и завершает работу.
@@ -1688,6 +1835,7 @@ class CameraActivity : AppCompatActivity() {
         applyFilter(currentFilter)
         showResultUI(true)
         updatePageCounter()
+        if (multiPageMode) refreshPagesList()
     }
 
     private fun applyFilter(filter: String) {
@@ -1816,24 +1964,41 @@ class CameraActivity : AppCompatActivity() {
     }
 
     private fun showResultUI(show: Boolean) {
-        val v = if (show) View.VISIBLE else View.GONE
-        val g = if (show) View.GONE else View.VISIBLE
+        val sheetVis = if (show) View.VISIBLE else View.GONE
 
-        findViewById<View>(R.id.filterPanel).visibility = v
-        findViewById<View>(R.id.actionsLayout).visibility = v
-        retakeButton.visibility = v
-        cropButton.visibility = v
-        saveResultButton.visibility = v
-        hdrButton.visibility = g      // ← тоже спрятать
-        aiButton.visibility = g       // ← тоже спрятать
-        captureButton.visibility = g
-        resultImageView.visibility = v
-        previewView.visibility = g
-        overlay.visibility = g
+        // Показываем/скрываем шторку целиком
+        findViewById<View>(R.id.bottomSheet).visibility = sheetVis
 
-        if (multiPageMode) {
-            updatePageCounter()
+        // Внутри шторки всё видно
+        if (show) {
+            findViewById<View>(R.id.actionsLayout).visibility = View.VISIBLE
+            cropButton.visibility = View.VISIBLE
+            saveResultButton.visibility = View.VISIBLE
+            retakeButton.visibility = View.VISIBLE
+
+            if (multiPageMode) {
+                // В мультирежиме показываем header + миниатюры/фильтры по состоянию
+                pagesHeaderRow.visibility = View.VISIBLE
+                applyPagesViewState()
+            } else {
+                // В обычном — фильтры + кнопки действий
+                findViewById<View>(R.id.filterPanel).visibility = View.VISIBLE
+                actionButtonsRow.visibility = View.VISIBLE
+                pagesHeaderRow.visibility = View.GONE
+                pagesInlineRecycler.visibility = View.GONE
+            }
         }
+
+        // Скрываем камеру/кнопку съёмки, показываем результат
+        captureButton.visibility = if (show) View.GONE else View.VISIBLE
+        resultImageView.visibility = if (show) View.VISIBLE else View.GONE
+        previewView.visibility = if (show) View.GONE else View.VISIBLE
+        overlay.visibility = if (show) View.GONE else View.VISIBLE
+
+        // Скроем кнопку меню, когда не на превью
+        findViewById<View>(R.id.menuButton).visibility = if (show) View.VISIBLE else View.GONE
+
+        if (multiPageMode) updatePageCounter()
     }
 
     private fun releaseResources() {

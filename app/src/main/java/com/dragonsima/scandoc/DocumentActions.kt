@@ -165,4 +165,29 @@ object DocumentActions {
             false
         }
     }
+
+    fun shareMultiplePdfs(context: Context, files: List<File>): Boolean {
+        val existing = files.filter { it.exists() }
+        if (existing.isEmpty()) return false
+        return try {
+            val uris = existing.map {
+                FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    it
+                )
+            }.toTypedArray()
+
+            val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                type = "application/pdf"
+                putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris.toList()))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(intent, context.getString(R.string.docs_share_multiple_title)))
+            true
+        } catch (e: Exception) {
+            Toast.makeText(context, context.getString(R.string.actions_share_error), Toast.LENGTH_SHORT).show()
+            false
+        }
+    }
 }

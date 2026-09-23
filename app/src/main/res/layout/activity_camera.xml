@@ -5,480 +5,501 @@
     android:layout_height="match_parent"
     android:background="#000000">
 
-    <androidx.camera.view.PreviewView
-        android:id="@+id/previewView"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent" />
-
-    <com.dragonsima.scandoc.OverlayView
-        android:id="@+id/overlayView"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent" />
-
-    <ImageView
-        android:id="@+id/resultImageView"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:visibility="gone"
-        android:scaleType="fitCenter"
-        android:background="@color/surface" />
-
-    <ProgressBar
-        android:id="@+id/progressBar"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="center"
-        android:visibility="gone" />
-
-    <!-- Верхняя панель: назад слева, AI и HDR справа -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_gravity="top"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:paddingStart="8dp"
-        android:paddingEnd="8dp"
-        android:paddingTop="8dp">
-
-        <!-- Кнопка Назад -->
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/backButton"
-            style="@style/Widget.MaterialComponents.Button.TextButton"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:contentDescription="Назад"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:minWidth="44dp"
-            android:minHeight="44dp"
-            android:padding="0dp"
-            android:stateListAnimator="@null"
-            android:text="←"
-            android:textColor="@color/white"
-            android:textSize="22sp"
-            app:backgroundTint="#59000000"
-            app:cornerRadius="22dp"
-            app:iconPadding="0dp" />
-
-        <!-- Распорка — прижимает следующие кнопки вправо -->
-        <View
-            android:layout_width="0dp"
-            android:layout_height="1dp"
-            android:layout_weight="1" />
-
-        <!-- AI-скан -->
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/aiButton"
-            style="@style/Widget.MaterialComponents.Button.TextButton"
-            android:layout_width="wrap_content"
-            android:layout_height="36dp"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:stateListAnimator="@null"
-            android:text="AI: СКАН"
-            android:textColor="@color/white"
-            android:textSize="12sp"
-            app:backgroundTint="@color/grey_500"
-            app:cornerRadius="18dp" />
-
-        <!-- HDR -->
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/hdrButton"
-            style="@style/Widget.MaterialComponents.Button.TextButton"
-            android:layout_width="wrap_content"
-            android:layout_height="36dp"
-            android:layout_marginStart="8dp"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:stateListAnimator="@null"
-            android:text="HDR: ВЫКЛ"
-            android:textColor="@color/white"
-            android:textSize="12sp"
-            app:backgroundTint="@color/grey_500"
-            app:cornerRadius="18dp" />
-
-    </LinearLayout>
-    <!-- Счётчик страниц (только в мультирежиме) -->
-    <TextView
-        android:id="@+id/pageCounterText"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="top|center_horizontal"
-        android:layout_marginTop="64dp"
-        android:paddingStart="12dp"
-        android:paddingEnd="12dp"
-        android:paddingTop="6dp"
-        android:paddingBottom="6dp"
-        android:background="#CC000000"
-        android:textColor="@color/white"
-        android:textSize="12sp"
-        android:textStyle="bold"
-        android:text="Стр. 1"
-        android:visibility="gone" />
-
-    <!-- Кнопка съёмки -->
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/captureButton"
-        android:layout_width="72dp"
-        android:layout_height="72dp"
-        android:layout_gravity="bottom|center_horizontal"
-        android:layout_marginBottom="40dp"
-        android:text="📷"
-        android:textSize="28sp"
-        android:textColor="@color/white"
-        android:contentDescription="Сделать снимок"
-        app:backgroundTint="@color/primary_color"
-        app:cornerRadius="36dp"
-        app:strokeColor="@color/white"
-        app:strokeWidth="4dp"
-        app:iconPadding="0dp"
-        android:insetTop="0dp"
-        android:insetBottom="0dp"
-        android:stateListAnimator="@null"
-        android:elevation="8dp"
-        android:minWidth="72dp"
-        android:minHeight="72dp" />
-
-    <!-- ===== НИЖНИЙ БЛОК: фильтры + действия ===== -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_gravity="bottom"
         android:orientation="vertical">
 
-        <!-- Панель фильтров (горизонтальный скролл) -->
-        <HorizontalScrollView
-            android:id="@+id/filterPanel"
+        <!-- ==================== TOP BAR ==================== -->
+        <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="#CC000000"
-            android:scrollbars="none"
-            android:visibility="gone">
+            android:layout_height="56dp"
+            android:orientation="horizontal"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:gravity="center_vertical">
 
-            <LinearLayout
+            <ImageButton
+                android:id="@+id/backButton"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:src="@drawable/ic_arrow_back"
+                android:contentDescription="Назад"
+                app:tint="@color/white" />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
+            <TextView
+                android:id="@+id/pageCounterText"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp"
-                android:paddingTop="8dp"
-                android:paddingBottom="8dp">
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:paddingTop="6dp"
+                android:paddingBottom="6dp"
+                android:layout_marginEnd="8dp"
+                android:background="#59000000"
+                android:textColor="@color/white"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:visibility="gone"
+            android:text="Готово: 0" />
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/filterOriginal"
-                    style="@style/Widget.MaterialComponents.Button.TextButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginEnd="4dp"
-                    android:minWidth="88dp"
-                    android:maxLines="1"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:text="Оригинал"
-                    android:textColor="@color/white"
-                    app:autoSizeTextType="uniform"
-                    app:autoSizeMinTextSize="10sp"
-                    app:autoSizeMaxTextSize="13sp"
-                    app:autoSizeStepGranularity="1sp"
-                    app:backgroundTint="@color/grey_600"
-                    app:cornerRadius="16dp"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    android:stateListAnimator="@null" />
+            <ImageButton
+                android:id="@+id/menuButton"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:src="@drawable/ic_more_vert2"
+                android:contentDescription="Ещё"
+                app:tint="@color/white" />
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/filterPhoto"
-                    style="@style/Widget.MaterialComponents.Button.TextButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginEnd="4dp"
-                    android:minWidth="88dp"
-                    android:maxLines="1"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:text="Фото"
-                    android:textColor="@color/white"
-                    app:autoSizeTextType="uniform"
-                    app:autoSizeMinTextSize="10sp"
-                    app:autoSizeMaxTextSize="13sp"
-                    app:autoSizeStepGranularity="1sp"
-                    app:backgroundTint="@color/grey_600"
-                    app:cornerRadius="16dp"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    android:stateListAnimator="@null" />
+            <!-- Скрытые кнопки (управляются из меню ⋯) -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/hdrButton"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:visibility="gone" />
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/filterColor"
-                    style="@style/Widget.MaterialComponents.Button.TextButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginEnd="4dp"
-                    android:minWidth="88dp"
-                    android:maxLines="1"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:text="Цветной"
-                    android:textColor="@color/white"
-                    app:autoSizeTextType="uniform"
-                    app:autoSizeMinTextSize="10sp"
-                    app:autoSizeMaxTextSize="13sp"
-                    app:autoSizeStepGranularity="1sp"
-                    app:backgroundTint="@color/primary_color"
-                    app:cornerRadius="16dp"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    android:stateListAnimator="@null" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/aiButton"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:visibility="gone" />
+        </LinearLayout>
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/filterGray"
-                    style="@style/Widget.MaterialComponents.Button.TextButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginEnd="4dp"
-                    android:minWidth="88dp"
-                    android:maxLines="1"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:text="Серый"
-                    android:textColor="@color/white"
-                    app:autoSizeTextType="uniform"
-                    app:autoSizeMinTextSize="10sp"
-                    app:autoSizeMaxTextSize="13sp"
-                    app:autoSizeStepGranularity="1sp"
-                    app:backgroundTint="@color/grey_600"
-                    app:cornerRadius="16dp"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    android:stateListAnimator="@null" />
+        <!-- ==================== ПРЕВЬЮ / КАМЕРА ==================== -->
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/filterBW"
-                    style="@style/Widget.MaterialComponents.Button.TextButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginEnd="4dp"
-                    android:minWidth="88dp"
-                    android:maxLines="1"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:text="Ч/Б"
-                    android:textColor="@color/white"
-                    app:autoSizeTextType="uniform"
-                    app:autoSizeMinTextSize="10sp"
-                    app:autoSizeMaxTextSize="13sp"
-                    app:autoSizeStepGranularity="1sp"
-                    app:backgroundTint="@color/grey_600"
-                    app:cornerRadius="16dp"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    android:stateListAnimator="@null" />
+            <androidx.camera.view.PreviewView
+                android:id="@+id/previewView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/filterShadow"
-                    style="@style/Widget.MaterialComponents.Button.TextButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginEnd="4dp"
-                    android:minWidth="88dp"
-                    android:maxLines="1"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:text="Тени"
-                    android:textColor="@color/white"
-                    app:autoSizeTextType="uniform"
-                    app:autoSizeMinTextSize="10sp"
-                    app:autoSizeMaxTextSize="13sp"
-                    app:autoSizeStepGranularity="1sp"
-                    app:backgroundTint="@color/grey_600"
-                    app:cornerRadius="16dp"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    android:stateListAnimator="@null" />
+            <com.dragonsima.scandoc.OverlayView
+                android:id="@+id/overlayView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/filterSharp"
-                    style="@style/Widget.MaterialComponents.Button.TextButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:minWidth="88dp"
-                    android:maxLines="1"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:text="Резкость"
-                    android:textColor="@color/white"
-                    app:autoSizeTextType="uniform"
-                    app:autoSizeMinTextSize="10sp"
-                    app:autoSizeMaxTextSize="13sp"
-                    app:autoSizeStepGranularity="1sp"
-                    app:backgroundTint="@color/grey_600"
-                    app:cornerRadius="16dp"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    android:stateListAnimator="@null" />
+            <ImageView
+                android:id="@+id/resultImageView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone"
+                android:scaleType="fitCenter" />
 
-            </LinearLayout>
-        </HorizontalScrollView>
+            <ProgressBar
+                android:id="@+id/progressBar"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:visibility="gone" />
 
-        <!-- Панель действий -->
+            <!-- Кнопка съёмки (видна только в режиме камеры) -->
+            <com.google.android.material.floatingactionbutton.FloatingActionButton
+                android:id="@+id/captureButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom|center_horizontal"
+                android:layout_marginBottom="32dp"
+                android:src="@drawable/ic_camera"
+                android:contentDescription="Сделать снимок"
+                app:fabCustomSize="72dp"
+                app:maxImageSize="32dp"
+                app:backgroundTint="@color/primary_color"
+                app:tint="@color/white"
+                app:borderWidth="3dp"
+                app:elevation="8dp"
+                app:rippleColor="#33FFFFFF" />
+        </FrameLayout>
+
+        <!-- ==================== BOTTOM SHEET ==================== -->
         <LinearLayout
-            android:id="@+id/actionsLayout"
+            android:id="@+id/bottomSheet"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:padding="16dp"
-            android:gravity="center"
-            android:background="@color/overlay_background"
+            android:orientation="vertical"
+            android:background="?attr/colorSurface"
             android:visibility="gone"
-            android:baselineAligned="false">
+            android:elevation="12dp"
+            android:paddingTop="4dp">
 
-            <!-- Переснять -->
+            <!-- Хедер мультирежима: заголовок + переключатель -->
             <LinearLayout
-                android:layout_width="0dp"
+                android:id="@+id/pagesHeaderRow"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical"
-                android:gravity="top|center_horizontal"
-                android:layout_marginEnd="8dp">
+                android:orientation="horizontal"
+                android:paddingStart="16dp"
+                android:paddingEnd="8dp"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
+                android:gravity="center_vertical"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/pagesHeaderTitle"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Страницы"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:textColor="?attr/colorOnSurface" />
 
                 <com.google.android.material.button.MaterialButton
-                    android:id="@+id/retakeButton"
-                    android:layout_width="56dp"
-                    android:layout_height="56dp"
-                    android:text="🔄"
-                    android:textSize="22sp"
-                    android:textColor="@color/white"
-                    android:contentDescription="Переснять"
-                    app:backgroundTint="@color/retake_color"
-                    app:cornerRadius="28dp"
+                    android:id="@+id/togglePagesButton"
+                    style="@style/Widget.Material3.Button.IconButton"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    app:icon="@drawable/ic_tune"
+                    app:iconSize="20dp"
+                    app:iconTint="?attr/colorOnSurfaceVariant"
+                    app:iconPadding="0dp"
                     android:insetTop="0dp"
                     android:insetBottom="0dp"
-                    android:stateListAnimator="@null"
-                    android:minWidth="56dp"
-                    android:minHeight="56dp"
-                    android:padding="0dp" />
+                    android:contentDescription="Переключить" />
+            </LinearLayout>
+
+            <!-- Контейнер миниатюр страниц (мультирежим) -->
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/pagesInlineRecycler"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:paddingTop="4dp"
+                android:paddingBottom="8dp"
+                android:clipToPadding="false"
+                android:orientation="horizontal"
+                android:visibility="gone" />
+
+            <!-- Панель фильтров (горизонтальный скролл) -->
+            <HorizontalScrollView
+                android:id="@+id/filterPanel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:scrollbars="none"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:paddingTop="4dp">
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/filterOriginal"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:layout_marginEnd="6dp"
+                        android:minWidth="64dp"
+                        android:maxLines="1"
+                        android:text="Ориг."
+                        android:textSize="11sp"
+                        app:autoSizeTextType="uniform"
+                        app:autoSizeMinTextSize="9sp"
+                        app:autoSizeMaxTextSize="11sp"
+                        app:autoSizeStepGranularity="1sp"
+                        app:cornerRadius="18dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/filterPhoto"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:layout_marginEnd="6dp"
+                        android:minWidth="64dp"
+                        android:maxLines="1"
+                        android:text="Фото"
+                        android:textSize="11sp"
+                        app:autoSizeTextType="uniform"
+                        app:autoSizeMinTextSize="9sp"
+                        app:autoSizeMaxTextSize="11sp"
+                        app:autoSizeStepGranularity="1sp"
+                        app:cornerRadius="18dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/filterColor"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:layout_marginEnd="6dp"
+                        android:minWidth="64dp"
+                        android:maxLines="1"
+                        android:text="Цвет"
+                        android:textSize="11sp"
+                        app:autoSizeTextType="uniform"
+                        app:autoSizeMinTextSize="9sp"
+                        app:autoSizeMaxTextSize="11sp"
+                        app:autoSizeStepGranularity="1sp"
+                        app:cornerRadius="18dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/filterGray"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:layout_marginEnd="6dp"
+                        android:minWidth="64dp"
+                        android:maxLines="1"
+                        android:text="Серый"
+                        android:textSize="11sp"
+                        app:autoSizeTextType="uniform"
+                        app:autoSizeMinTextSize="9sp"
+                        app:autoSizeMaxTextSize="11sp"
+                        app:autoSizeStepGranularity="1sp"
+                        app:cornerRadius="18dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/filterBW"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:layout_marginEnd="6dp"
+                        android:minWidth="64dp"
+                        android:maxLines="1"
+                        android:text="Ч/Б"
+                        android:textSize="11sp"
+                        app:autoSizeTextType="uniform"
+                        app:autoSizeMinTextSize="9sp"
+                        app:autoSizeMaxTextSize="11sp"
+                        app:autoSizeStepGranularity="1sp"
+                        app:cornerRadius="18dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/filterShadow"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:layout_marginEnd="6dp"
+                        android:minWidth="64dp"
+                        android:maxLines="1"
+                        android:text="Тени"
+                        android:textSize="11sp"
+                        app:autoSizeTextType="uniform"
+                        app:autoSizeMinTextSize="9sp"
+                        app:autoSizeMaxTextSize="11sp"
+                        app:autoSizeStepGranularity="1sp"
+                        app:cornerRadius="18dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/filterSharp"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:minWidth="64dp"
+                        android:maxLines="1"
+                        android:text="Резк."
+                        android:textSize="11sp"
+                        app:autoSizeTextType="uniform"
+                        app:autoSizeMinTextSize="9sp"
+                        app:autoSizeMaxTextSize="11sp"
+                        app:autoSizeStepGranularity="1sp"
+                        app:cornerRadius="18dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp" />
+                </LinearLayout>
+            </HorizontalScrollView>
+
+            <!-- Панель действий -->
+            <LinearLayout
+                android:id="@+id/actionsLayout"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingTop="8dp"
+                android:paddingBottom="4dp">
+
+                <!-- 4 кнопки действий: иконка + подпись -->
+                <LinearLayout
+                    android:id="@+id/actionButtonsRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:gravity="center"
+                    android:baselineAligned="false">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/cropButton"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="0dp"
+                        android:layout_height="60dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="2dp"
+                        android:layout_marginEnd="2dp"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
+                        android:text="Обрезать"
+                        android:textSize="10sp"
+                        android:textColor="?attr/colorOnSurfaceVariant"
+                        android:maxLines="1"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:minWidth="0dp"
+                        android:minHeight="0dp"
+                        app:icon="@drawable/ic_crop"
+                        app:iconSize="20dp"
+                        app:iconGravity="top"
+                        app:iconPadding="4dp"
+                        app:cornerRadius="14dp"
+                        app:backgroundTint="?attr/colorSurfaceVariant"
+                        android:contentDescription="Обрезать" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/rotateButton"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="0dp"
+                        android:layout_height="60dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="2dp"
+                        android:layout_marginEnd="2dp"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
+                        android:text="Повернуть"
+                        android:textSize="10sp"
+                        android:textColor="?attr/colorOnSurfaceVariant"
+                        android:maxLines="1"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:minWidth="0dp"
+                        android:minHeight="0dp"
+                        app:icon="@drawable/ic_rotate"
+                        app:iconSize="20dp"
+                        app:iconGravity="top"
+                        app:iconPadding="4dp"
+                        app:cornerRadius="14dp"
+                        app:backgroundTint="?attr/colorSurfaceVariant"
+                        android:contentDescription="Повернуть" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/ocrButton"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="0dp"
+                        android:layout_height="60dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="2dp"
+                        android:layout_marginEnd="2dp"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
+                        android:text="Текст"
+                        android:textSize="10sp"
+                        android:textColor="?attr/colorOnSurfaceVariant"
+                        android:maxLines="1"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:minWidth="0dp"
+                        android:minHeight="0dp"
+                        app:icon="@drawable/ic_text"
+                        app:iconSize="20dp"
+                        app:iconGravity="top"
+                        app:iconPadding="4dp"
+                        app:cornerRadius="14dp"
+                        app:backgroundTint="?attr/colorSurfaceVariant"
+                        android:contentDescription="Текст" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/jpgButton"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="0dp"
+                        android:layout_height="60dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="2dp"
+                        android:layout_marginEnd="2dp"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
+                        android:text="JPG"
+                        android:textSize="10sp"
+                        android:textColor="?attr/colorOnSurfaceVariant"
+                        android:maxLines="1"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:minWidth="0dp"
+                        android:minHeight="0dp"
+                        app:icon="@drawable/ic_image"
+                        app:iconSize="20dp"
+                        app:iconGravity="top"
+                        app:iconPadding="4dp"
+                        app:cornerRadius="14dp"
+                        app:backgroundTint="?attr/colorSurfaceVariant"
+                        android:contentDescription="JPG" />
+                </LinearLayout>
+
+                <!-- Сохранить PDF -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/saveResultButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="46dp"
+                    android:layout_marginStart="16dp"
+                    android:layout_marginEnd="16dp"
+                    android:layout_marginTop="8dp"
+                    android:text="Сохранить PDF"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/white"
+                    android:contentDescription="Сохранить"
+                    app:icon="@drawable/ic_check"
+                    app:iconSize="20dp"
+                    app:iconGravity="textStart"
+                    app:iconPadding="8dp"
+                    app:iconTint="@color/white"
+                    app:backgroundTint="@color/save_color"
+                    app:cornerRadius="23dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:stateListAnimator="@null" />
+
+                <!-- Переснять — компактная -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/retakeButton"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:layout_gravity="center_horizontal"
+                    android:layout_marginTop="0dp"
+                    android:text="Переснять"
+                    android:textSize="12sp"
+                    android:textColor="?attr/colorOnSurfaceVariant"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minHeight="36dp"
+                    android:stateListAnimator="@null" />
 
                 <TextView
                     android:id="@+id/retakeLabel"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Переснять"
-                    android:textSize="11sp"
-                    android:textColor="@color/text_secondary"
-                    android:layout_marginTop="6dp"
-                    android:maxLines="1" />
-            </LinearLayout>
-
-            <!-- Обрезать -->
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical"
-                android:gravity="top|center_horizontal"
-                android:layout_marginEnd="8dp">
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/cropButton"
-                    android:layout_width="56dp"
-                    android:layout_height="56dp"
-                    android:text="✂️"
-                    android:textSize="22sp"
-                    android:textColor="@color/white"
-                    android:contentDescription="Обрезать"
-                    app:backgroundTint="@color/crop_color"
-                    app:cornerRadius="28dp"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    android:stateListAnimator="@null"
-                    android:minWidth="56dp"
-                    android:minHeight="56dp"
-                    android:padding="0dp" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Обрезать"
-                    android:textSize="11sp"
-                    android:textColor="@color/text_secondary"
-                    android:layout_marginTop="6dp"
-                    android:maxLines="1" />
-            </LinearLayout>
-
-            <!-- Кнопка Текст (OCR) -->
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical"
-                android:gravity="top|center_horizontal"
-                android:layout_marginEnd="8dp">
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/ocrButton"
-                    android:layout_width="56dp"
-                    android:layout_height="56dp"
-                    android:text="📋"
-                    android:textSize="22sp"
-                    android:textColor="@color/white"
-                    android:contentDescription="Распознать текст"
-                    app:backgroundTint="@color/primary_color"
-                    app:cornerRadius="28dp"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    android:stateListAnimator="@null"
-                    android:minWidth="56dp"
-                    android:minHeight="56dp"
-                    android:padding="0dp" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Текст"
-                    android:textSize="11sp"
-                    android:textColor="@color/text_secondary"
-                    android:layout_marginTop="6dp"
-                    android:maxLines="1" />
-            </LinearLayout>
-
-            <!-- Сохранить -->
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical"
-                android:gravity="top|center_horizontal">
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/saveResultButton"
-                    android:layout_width="56dp"
-                    android:layout_height="56dp"
-                    android:text="✅"
-                    android:textSize="22sp"
-                    android:textColor="@color/white"
-                    android:contentDescription="Сохранить документ"
-                    app:backgroundTint="@color/save_color"
-                    app:cornerRadius="28dp"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    android:stateListAnimator="@null"
-                    android:minWidth="56dp"
-                    android:minHeight="56dp"
-                    android:padding="0dp" />
+                    android:layout_width="0dp"
+                    android:layout_height="0dp"
+                    android:visibility="gone" />
 
                 <TextView
                     android:id="@+id/saveLabel"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Сохранить"
-                    android:textSize="11sp"
-                    android:textColor="@color/text_secondary"
-                    android:layout_marginTop="6dp"
-                    android:maxLines="1" />
+                    android:layout_width="0dp"
+                    android:layout_height="0dp"
+                    android:visibility="gone" />
             </LinearLayout>
-
         </LinearLayout>
     </LinearLayout>
-
 </FrameLayout>

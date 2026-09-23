@@ -7,61 +7,151 @@
     android:background="@color/background">
 
     <!-- Верхняя панель -->
+    <!-- Обычный топбар -->
     <LinearLayout
+        android:id="@+id/normalTopBar"
         android:layout_width="match_parent"
         android:layout_height="56dp"
         android:orientation="horizontal"
         android:paddingHorizontal="16dp"
         android:gravity="center_vertical"
-        android:background="@color/surface"
+        android:background="?attr/colorSurface"
         android:elevation="4dp">
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/backButton"
+            style="@style/Widget.Material3.Button.IconButton"
             android:layout_width="40dp"
             android:layout_height="40dp"
-            app:icon="@android:drawable/ic_menu_revert"
+            app:icon="@drawable/ic_arrow_back"
             app:iconSize="20dp"
-            app:iconTint="@color/text_primary"
-            app:cornerRadius="20dp"
+            app:iconTint="?attr/colorOnSurface"
+            app:iconPadding="0dp"
             android:insetTop="0dp"
             android:insetBottom="0dp"
-            android:background="@android:color/transparent"/>
+            android:background="@android:color/transparent"
+            android:contentDescription="Назад" />
 
         <TextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="Мои документы"
+            android:text="@string/docs_title"
             android:textSize="18sp"
             android:textStyle="bold"
-            android:textColor="@color/text_primary"
-            android:gravity="center"/>
+            android:textColor="?attr/colorOnSurface"
+            android:gravity="center" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/reindexButton"
+            style="@style/Widget.Material3.Button.IconButton"
             android:layout_width="40dp"
             android:layout_height="40dp"
-            android:layout_marginEnd="4dp"
             app:icon="@android:drawable/ic_menu_rotate"
             app:iconSize="20dp"
-            app:iconTint="@color/text_primary"
-            app:cornerRadius="20dp"
+            app:iconTint="?attr/colorOnSurface"
+            app:iconPadding="0dp"
             android:insetTop="0dp"
             android:insetBottom="0dp"
-            android:background="@android:color/transparent"/>
+            android:background="@android:color/transparent"
+            android:contentDescription="Переиндексировать" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/sortButton"
+            style="@style/Widget.Material3.Button.IconButton"
             android:layout_width="40dp"
             android:layout_height="40dp"
+            android:layout_marginStart="4dp"
             app:icon="@android:drawable/ic_menu_sort_by_size"
             app:iconSize="20dp"
-            app:iconTint="@color/text_primary"
-            app:cornerRadius="20dp"
+            app:iconTint="?attr/colorOnSurface"
+            app:iconPadding="0dp"
             android:insetTop="0dp"
             android:insetBottom="0dp"
-            android:background="@android:color/transparent"/>
+            android:background="@android:color/transparent"
+            android:contentDescription="Сортировка" />
+    </LinearLayout>
+
+    <!-- Топбар режима выделения -->
+    <LinearLayout
+        android:id="@+id/selectionTopBar"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:orientation="horizontal"
+        android:paddingHorizontal="16dp"
+        android:gravity="center_vertical"
+        android:background="?attr/colorPrimaryContainer"
+        android:elevation="4dp"
+        android:visibility="gone">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/cancelSelectionButton"
+            style="@style/Widget.Material3.Button.IconButton"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            app:icon="@drawable/ic_close"
+            app:iconSize="20dp"
+            app:iconTint="?attr/colorOnPrimaryContainer"
+            app:iconPadding="0dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:background="@android:color/transparent"
+            android:contentDescription="Отмена" />
+
+        <TextView
+            android:id="@+id/selectionCountText"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:text="Выбрано: 0"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:textColor="?attr/colorOnPrimaryContainer" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/selectAllButton"
+            style="@style/Widget.Material3.Button.IconButton"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            app:icon="@drawable/ic_select_all"
+            app:iconSize="20dp"
+            app:iconTint="?attr/colorOnPrimaryContainer"
+            app:iconPadding="0dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:background="@android:color/transparent"
+            android:contentDescription="Выделить все" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/shareSelectedButton"
+            style="@style/Widget.Material3.Button.IconButton"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginStart="4dp"
+            app:icon="@drawable/ic_share"
+            app:iconSize="20dp"
+            app:iconTint="?attr/colorOnPrimaryContainer"
+            app:iconPadding="0dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:background="@android:color/transparent"
+            android:contentDescription="Поделиться" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/deleteSelectedButton"
+            style="@style/Widget.Material3.Button.IconButton"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginStart="4dp"
+            app:icon="@drawable/ic_delete"
+            app:iconSize="20dp"
+            app:iconTint="?attr/colorOnPrimaryContainer"
+            app:iconPadding="0dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:background="@android:color/transparent"
+            android:contentDescription="Удалить" />
     </LinearLayout>
 
     <!-- Поле поиска -->
@@ -73,15 +163,16 @@
         android:layout_marginEnd="16dp"
         android:layout_marginTop="8dp"
         android:layout_marginBottom="8dp"
-        android:hint="Поиск по содержимому"
+        android:hint="@string/docs_search_hint"
         android:padding="12dp"
-        android:background="@color/surface"
-        android:textColor="@color/text_primary"
-        android:textColorHint="@color/text_secondary"
+        android:background="@drawable/bg_search_input"
+        android:drawableStart="@android:drawable/ic_menu_search"
+        android:drawablePadding="8dp"
+        android:textColor="?attr/colorOnSurface"
+        android:textColorHint="?attr/colorOnSurfaceVariant"
         android:textSize="14sp"
         android:inputType="text"
         android:imeOptions="actionSearch"
-        android:drawablePadding="8dp"
         android:maxLines="1"
         android:singleLine="true" />
 
