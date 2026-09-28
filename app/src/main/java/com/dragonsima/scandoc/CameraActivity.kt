@@ -5,7 +5,6 @@ import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.net.Uri
 import android.os.Bundle
-import android.provider.MediaStore
 import android.util.Log
 import android.view.View
 import android.widget.Button
@@ -942,10 +941,6 @@ class CameraActivity : AppCompatActivity() {
 
     private fun processFrame(imageProxy: ImageProxy) {
         val bitmap = imageProxy.toBitmap()
-        if (bitmap == null) {
-            imageProxy.close()
-            return
-        }
 
         val rotation = imageProxy.imageInfo.rotationDegrees
         val rotatedBitmap = if (rotation != 0) {
@@ -1767,7 +1762,9 @@ class CameraActivity : AppCompatActivity() {
 
     private fun handleMlKitResult(uri: Uri) {
         val bitmap = try {
-            MediaStore.Images.Media.getBitmap(contentResolver, uri)
+            contentResolver.openInputStream(uri)?.use { stream ->
+                android.graphics.BitmapFactory.decodeStream(stream)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Ошибка чтения Uri", e)
             null

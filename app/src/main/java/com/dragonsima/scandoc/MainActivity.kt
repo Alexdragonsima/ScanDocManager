@@ -1,14 +1,11 @@
 package com.dragonsima.scandoc
 
 import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.ImageView
-import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -50,8 +47,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val pinLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            // PIN введён верно — перезапускаем onCreate для инициализации
+            recreate()
+        } else {
+            // Пользователь закрыл без ввода — выходим
+            finish()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Проверка PIN-кода
+        if (PinActivity.isPinSet(this) && !ScanDocApp.isUnlocked) {
+            pinLauncher.launch(PinActivity.createIntent(this, PinActivity.MODE_VERIFY))
+            return
+        }
 
         val prefs = getSharedPreferences("app_prefs", MODE_PRIVATE)
         if (!prefs.getBoolean("onboarding_completed", false)) {

@@ -32,6 +32,15 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private lateinit var prefs: android.content.SharedPreferences
+    private val pinLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            // Пользователь только что установил/сменил PIN — считаем разблокированным
+            ScanDocApp.isUnlocked = true
+        }
+        refreshValues()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -74,6 +83,11 @@ class SettingsActivity : AppCompatActivity() {
         // === ДАННЫЕ ===
         findViewById<android.view.View>(R.id.clearCacheRow).setOnClickListener {
             confirmClearCache()
+        }
+
+        // === БЕЗОПАСНОСТЬ ===
+        findViewById<android.view.View>(R.id.pinRow).setOnClickListener {
+            showPinDialog()
         }
 
         // === ПРИЛОЖЕНИЕ ===
@@ -229,6 +243,53 @@ class SettingsActivity : AppCompatActivity() {
         return String.format("%.2f ГБ", gb)
     }
 
+    // ==================== БЕЗОПАСНОСТЬ ====================
+
+    private fun showPinDialog() {
+        val hasPin = PinActivity.isPinSet(this)
+
+        val options = if (hasPin) {
+            arrayOf(
+                getString(R.string.settings_pin_action_change),
+                getString(R.string.settings_pin_action_disable)
+            )
+        } else {
+            arrayOf(getString(R.string.settings_pin_action_enable))
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.settings_pin_dialog_title))
+            .setItems(options) { _, which ->
+                if (hasPin) {
+                    when (which) {
+                        0 -> pinLauncher.launch(PinActivity.createIntent(this, PinActivity.MODE_CHANGE_OLD))
+                        1 -> confirmDisablePin()
+                    }
+                } else {
+                    pinLauncher.launch(PinActivity.createIntent(this, PinActivity.MODE_CREATE))
+                }
+            }
+            .setNegativeButton(getString(R.string.common_cancel), null)
+            .show()
+    }
+
+    private fun confirmDisablePin() {
+        // Запрашиваем текущий PIN, и если верный — удаляем
+        val intent = PinActivity.createIntent(this, PinActivity.MODE_VERIFY)
+        pinVerifyLauncher.launch(intent)
+    }
+
+    private val pinVerifyLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            PinActivity.clearPin(this)
+            ScanDocApp.isUnlocked = true    // ← добавить
+            Toast.makeText(this, getString(R.string.pin_disabled_success), Toast.LENGTH_SHORT).show()
+            refreshValues()
+        }
+    }
+
     // ==================== ПРИЛОЖЕНИЕ ====================
 
     private fun resetOnboarding() {
@@ -259,6 +320,13 @@ class SettingsActivity : AppCompatActivity() {
             "medium" -> getString(R.string.settings_pdf_quality_medium)
             "low" -> getString(R.string.settings_pdf_quality_low)
             else -> getString(R.string.settings_pdf_quality_high)
+        }
+
+        // PIN
+        findViewById<TextView>(R.id.pinValueText).text = if (PinActivity.isPinSet(this)) {
+            getString(R.string.settings_pin_enabled)
+        } else {
+            getString(R.string.settings_pin_disabled)
         }
 
         refreshStats()

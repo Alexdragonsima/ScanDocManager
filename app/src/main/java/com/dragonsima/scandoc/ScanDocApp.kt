@@ -9,6 +9,12 @@ import androidx.appcompat.app.AppCompatDelegate
  */
 class ScanDocApp : Application() {
 
+    companion object {
+        /** Установлен ли флаг разблокировки в текущей сессии. */
+        @Volatile
+        var isUnlocked: Boolean = false
+    }
+
     override fun onCreate() {
         super.onCreate()
         applySavedTheme()

@@ -71,6 +71,12 @@
             android:name=".AboutActivity"
             android:exported="false"
             android:label="@string/about_title" />
+
+        <activity
+            android:name=".PinActivity"
+            android:exported="false"
+            android:label="@string/pin_title"
+            android:launchMode="singleTask" />
     </application>
 
 </manifest>
