@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="?attr/colorSurface"
+    android:paddingTop="16dp"
+    android:paddingBottom="24dp">
+
+    <!-- Заголовок -->
+    <TextView
+        android:id="@+id/sheetTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:textColor="?attr/colorOnSurface"
+        android:text="@string/actions_saved_title" />
+
+    <!-- Имя файла -->
+    <TextView
+        android:id="@+id/sheetMessage"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
+        android:layout_marginTop="4dp"
+        android:textSize="13sp"
+        android:textColor="?attr/colorOnSurfaceVariant"
+        android:maxLines="2"
+        android:ellipsize="middle"
+        android:text="—" />
+
+    <!-- Действия -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="24dp"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:baselineAligned="false">
+
+        <!-- Открыть -->
+        <LinearLayout
+            android:id="@+id/actionOpen"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:background="?attr/selectableItemBackground"
+            android:clickable="true"
+            android:focusable="true"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp">
+
+            <ImageView
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:src="@drawable/ic_folder_open"
+                app:tint="?attr/colorPrimary"
+                android:contentDescription="" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/common_open"
+                android:textSize="12sp"
+                android:textColor="?attr/colorOnSurface"
+                android:maxLines="1" />
+        </LinearLayout>
+
+        <!-- Поделиться -->
+        <LinearLayout
+            android:id="@+id/actionShare"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:background="?attr/selectableItemBackground"
+            android:clickable="true"
+            android:focusable="true"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp">
+
+            <ImageView
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:src="@drawable/ic_share"
+                app:tint="?attr/colorPrimary"
+                android:contentDescription="" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/common_share"
+                android:textSize="12sp"
+                android:textColor="?attr/colorOnSurface"
+                android:maxLines="1" />
+        </LinearLayout>
+
+        <!-- Защитить паролем -->
+        <LinearLayout
+            android:id="@+id/actionProtect"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:background="?attr/selectableItemBackground"
+            android:clickable="true"
+            android:focusable="true"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp">
+
+            <ImageView
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:src="@drawable/ic_lock_protect"
+                app:tint="?attr/colorPrimary"
+                android:contentDescription="" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/pdf_protect_menu"
+                android:textSize="12sp"
+                android:textColor="?attr/colorOnSurface"
+                android:maxLines="2"
+                android:gravity="center" />
+        </LinearLayout>
+
+        <!-- Готово -->
+        <LinearLayout
+            android:id="@+id/actionDone"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:background="?attr/selectableItemBackground"
+            android:clickable="true"
+            android:focusable="true"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp">
+
+            <ImageView
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:src="@drawable/ic_check"
+                app:tint="?attr/colorPrimary"
+                android:contentDescription="" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/common_done"
+                android:textSize="12sp"
+                android:textColor="?attr/colorOnSurface"
+                android:maxLines="1" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

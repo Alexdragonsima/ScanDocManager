@@ -1,0 +1,49 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Угловые маркеры сканирования -->
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M21,27 L31,27 M21,27 L21,37" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M77,27 L87,27 M87,27 L87,37" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M21,81 L31,81 M21,71 L21,81" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M77,81 L87,81 M87,71 L87,81" />
+
+    <!-- Лист документа -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M39,24
+                          L69,24
+                          Q72,24 72,27
+                          L72,81
+                          Q72,84 69,84
+                          L39,84
+                          Q36,84 36,81
+                          L36,27
+                          Q36,24 39,24
+                          Z
+                          M44,38 L64,38 L64,41 L44,41 Z
+                          M44,44 L64,44 L64,47 L44,47 Z
+                          M44,50 L58,50 L58,53 L44,53 Z
+                          M44,56 L64,56 L64,59 L44,59 Z
+                          M44,62 L58,62 L58,65 L44,65 Z
+                          M44,68 L64,68 L64,71 L44,71 Z" />
+</vector>

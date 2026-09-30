@@ -11,7 +11,7 @@
 
     <application
         android:name=".ScanDocApp"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
@@ -77,6 +77,11 @@
             android:exported="false"
             android:label="@string/pin_title"
             android:launchMode="singleTask" />
+
+        <activity
+            android:name=".PdfProtectionActivity"
+            android:exported="false"
+            android:label="@string/pdf_protect_title" />
     </application>
 
 </manifest>

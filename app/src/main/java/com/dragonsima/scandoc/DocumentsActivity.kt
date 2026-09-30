@@ -181,12 +181,16 @@ class DocumentsActivity : AppCompatActivity() {
         }
     }
 
+    private val allowedExtensions = setOf("pdf", "txt", "docx")
+
     private fun loadDocuments() {
         lifecycleScope.launch {
             val files = withContext(Dispatchers.IO) {
                 val documentsDir = File(filesDir, "Documents")
                 if (documentsDir.exists()) {
-                    documentsDir.listFiles { file -> file.extension == "pdf" }?.toList() ?: emptyList()
+                    documentsDir.listFiles { file ->
+                        file.isFile && file.extension.lowercase() in allowedExtensions
+                    }?.toList() ?: emptyList()
                 } else emptyList()
             }
 
@@ -251,13 +255,14 @@ class DocumentsActivity : AppCompatActivity() {
             val deleted = withContext(Dispatchers.IO) {
                 var count = 0
                 files.forEach { file ->
+                    FileManager.deleteFromSaveFolderIfSet(this@DocumentsActivity, file.name)
                     val pdfDeleted = file.delete()
                     val thumbFile = File(
                         file.parentFile?.parentFile,
                         "Thumbnails/${file.nameWithoutExtension}_thumb.jpg"
                     )
                     if (thumbFile.exists()) thumbFile.delete()
-                    FileManager.deleteIndexForPdf(this@DocumentsActivity, file.name)
+                    FileManager.deleteIndexForFile(this@DocumentsActivity, file.name)
                     if (pdfDeleted) count++
                 }
                 count
@@ -333,7 +338,8 @@ class DocumentsActivity : AppCompatActivity() {
 
     private fun reindexAllDocuments() {
         val pdfsWithoutIndex = allDocuments.filter { file ->
-            FileManager.getIndexForPdf(this, file.name) == null
+            file.extension.equals("pdf", ignoreCase = true) &&
+                    FileManager.getIndexForFile(this, file.name) == null
         }
 
         if (pdfsWithoutIndex.isEmpty()) {
@@ -393,7 +399,7 @@ class DocumentsActivity : AppCompatActivity() {
         return try {
             val text = extractTextFromPdf(file) ?: return false
             if (text.isBlank()) return false
-            FileManager.saveIndexForPdf(this, file.name, text)
+            FileManager.saveIndexForFile(this, file.name, text)
             true
         } catch (e: Exception) {
             Log.e("DocumentsActivity", "indexSinglePdf error", e)
@@ -462,26 +468,55 @@ class DocumentsActivity : AppCompatActivity() {
     }
 
     private fun showDocumentMenu(file: File) {
-        val options = arrayOf(
-            getString(R.string.docs_menu_open),
-            getString(R.string.docs_menu_share),
-            getString(R.string.docs_menu_thumbnail),
-            getString(R.string.docs_menu_rename),
-            getString(R.string.docs_menu_delete)
-        )
+        val isPdf = file.extension.equals("pdf", ignoreCase = true)
+        val options = if (isPdf) {
+            arrayOf(
+                getString(R.string.docs_menu_open),
+                getString(R.string.docs_menu_share),
+                getString(R.string.pdf_protect_menu),
+                getString(R.string.docs_menu_thumbnail),
+                getString(R.string.docs_menu_rename),
+                getString(R.string.docs_menu_delete)
+            )
+        } else {
+            arrayOf(
+                getString(R.string.docs_menu_open),
+                getString(R.string.docs_menu_share),
+                getString(R.string.docs_menu_rename),
+                getString(R.string.docs_menu_delete)
+            )
+        }
 
         AlertDialog.Builder(this)
             .setTitle(file.nameWithoutExtension)
             .setItems(options) { _, which ->
-                when (which) {
-                    0 -> openPdf(file)
-                    1 -> sharePdf(file)
-                    2 -> showEnlargedThumbnail(file)
-                    3 -> renameFile(file)
-                    4 -> deleteFile(file)
+                if (isPdf) {
+                    when (which) {
+                        0 -> openFile(file)
+                        1 -> shareFile(file)
+                        2 -> startActivity(PdfProtectionActivity.createIntent(this, file))
+                        3 -> showEnlargedThumbnail(file)
+                        4 -> renameFile(file)
+                        5 -> deleteFile(file)
+                    }
+                } else {
+                    when (which) {
+                        0 -> openFile(file)
+                        1 -> shareFile(file)
+                        2 -> renameFile(file)
+                        3 -> deleteFile(file)
+                    }
                 }
             }
             .show()
+    }
+
+    private fun openFile(file: File) {
+        DocumentActions.openFile(this, file)
+    }
+
+    private fun shareFile(file: File) {
+        DocumentActions.shareFile(this, file)
     }
 
     private fun showEnlargedThumbnail(file: File) {
@@ -554,7 +589,7 @@ class DocumentsActivity : AppCompatActivity() {
                     return@setPositiveButton
                 }
 
-                val newFile = File(file.parentFile, "$newName.pdf")
+                val newFile = File(file.parentFile, "$newName.${file.extension}")
                 if (newFile.exists()) {
                     Toast.makeText(this, getString(R.string.docs_rename_exists), Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
@@ -574,7 +609,12 @@ class DocumentsActivity : AppCompatActivity() {
                             if (oldThumb.exists()) {
                                 oldThumb.renameTo(newThumb)
                             }
-                            FileManager.renameIndexForPdf(
+                            FileManager.renameIndexForFile(
+                                this@DocumentsActivity,
+                                file.name,
+                                newFile.name
+                            )
+                            FileManager.renameInSaveFolderIfSet(
                                 this@DocumentsActivity,
                                 file.name,
                                 newFile.name
@@ -597,6 +637,9 @@ class DocumentsActivity : AppCompatActivity() {
     private fun deleteFile(file: File) {
         lifecycleScope.launch {
             val success = withContext(Dispatchers.IO) {
+                // Удаляем копию в SAF до удаления локального файла
+                FileManager.deleteFromSaveFolderIfSet(this@DocumentsActivity, file.name)
+
                 val pdfDeleted = file.delete()
                 val thumbFile = File(
                     file.parentFile?.parentFile,
@@ -604,7 +647,7 @@ class DocumentsActivity : AppCompatActivity() {
                 )
                 val thumbDeleted = if (thumbFile.exists()) thumbFile.delete() else true
 
-                FileManager.deleteIndexForPdf(this@DocumentsActivity, file.name)
+                FileManager.deleteIndexForFile(this@DocumentsActivity, file.name)
 
                 pdfDeleted && thumbDeleted
             }
@@ -641,10 +684,31 @@ class DocumentAdapter(
 ) : RecyclerView.Adapter<DocumentAdapter.DocumentViewHolder>() {
 
     private val dateFormatter = SimpleDateFormat("d MMM yyyy, HH:mm", Locale.forLanguageTag("ru"))
+    private val fileNameFormatter = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
     private var matchCounts: Map<String, Int> = emptyMap()
     private val selectedFiles = mutableSetOf<String>()  // имена файлов
     private var selectionModeInternal = false
     val selectionMode: Boolean get() = selectionModeInternal
+
+    /**
+     * Возвращает корректный timestamp файла.
+     * Если lastModified() меньше 2000 года (восстановлен из бэкапа) — парсит дату из имени.
+     */
+    private fun getFileTimestamp(file: File): Long {
+        val lastMod = file.lastModified()
+        val year2000 = 946684800000L  // 1 января 2000, 00:00 UTC
+
+        if (lastMod > year2000) return lastMod
+
+        // Пытаемся распарсить из имени: yyyyMMdd_HHmmss
+        val name = file.nameWithoutExtension
+        val match = Regex("(\\d{8}_\\d{6})").find(name) ?: return lastMod
+        return try {
+            fileNameFormatter.parse(match.value)?.time ?: lastMod
+        } catch (e: Exception) {
+            lastMod
+        }
+    }
 
     fun setMatchCounts(counts: Map<String, Int>) {
         matchCounts = counts
@@ -692,7 +756,12 @@ class DocumentAdapter(
     override fun onBindViewHolder(holder: DocumentViewHolder, position: Int) {
         val file = documents[position]
         holder.title.text = file.nameWithoutExtension
-        holder.date.text = dateFormatter.format(Date(file.lastModified()))
+        val timestamp = getFileTimestamp(file)
+        holder.date.text = if (timestamp > 0L) {
+            dateFormatter.format(Date(timestamp))
+        } else {
+            "—"
+        }
 
         val count = matchCounts[file.name] ?: 0
         if (count > 0 && !selectionMode) {
@@ -702,15 +771,46 @@ class DocumentAdapter(
             holder.matchCount.visibility = View.GONE
         }
 
-        val thumbnailFile = File(
-            file.parentFile?.parentFile,
-            "Thumbnails/${file.nameWithoutExtension}_thumb.jpg"
-        )
-        Glide.with(holder.itemView.context)
-            .load(thumbnailFile)
-            .placeholder(R.drawable.placeholder_pdf)
-            .diskCacheStrategy(DiskCacheStrategy.ALL)
-            .into(holder.thumbnail)
+        when (file.extension.lowercase()) {
+            "pdf" -> {
+                holder.thumbnail.setPadding(0, 0, 0, 0)
+                holder.thumbnail.clearColorFilter()
+                holder.thumbnail.scaleType = ImageView.ScaleType.CENTER_CROP
+                val thumbnailFile = File(
+                    file.parentFile?.parentFile,
+                    "Thumbnails/${file.nameWithoutExtension}_thumb.jpg"
+                )
+                Glide.with(holder.itemView.context)
+                    .load(thumbnailFile)
+                    .placeholder(R.drawable.placeholder_pdf)
+                    .diskCacheStrategy(DiskCacheStrategy.ALL)
+                    .into(holder.thumbnail)
+            }
+            "txt" -> {
+                Glide.with(holder.itemView.context).clear(holder.thumbnail)
+                holder.thumbnail.setImageResource(R.drawable.ic_text_file)
+                holder.thumbnail.setColorFilter(
+                    androidx.core.content.ContextCompat.getColor(
+                        holder.itemView.context,
+                        R.color.primary_color
+                    )
+                )
+                holder.thumbnail.setPadding(28, 36, 28, 36)
+                holder.thumbnail.scaleType = ImageView.ScaleType.FIT_CENTER
+            }
+            "docx" -> {
+                Glide.with(holder.itemView.context).clear(holder.thumbnail)
+                holder.thumbnail.setImageResource(R.drawable.ic_word_file)
+                holder.thumbnail.setColorFilter(
+                    androidx.core.content.ContextCompat.getColor(
+                        holder.itemView.context,
+                        R.color.primary_color
+                    )
+                )
+                holder.thumbnail.setPadding(28, 36, 28, 36)
+                holder.thumbnail.scaleType = ImageView.ScaleType.FIT_CENTER
+            }
+        }
 
         // Чекбокс
         if (selectionMode) {

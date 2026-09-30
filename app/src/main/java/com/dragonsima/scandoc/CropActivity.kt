@@ -60,6 +60,27 @@ class CropActivity : AppCompatActivity() {
         isAntiAlias = true
     }
 
+    private val magnifierBorderPaint = Paint().apply {
+        color = Color.WHITE
+        strokeWidth = 5f
+        style = Paint.Style.STROKE
+        isAntiAlias = true
+    }
+
+    private val magnifierShadowPaint = Paint().apply {
+        color = Color.parseColor("#55000000")
+        strokeWidth = 12f
+        style = Paint.Style.STROKE
+        isAntiAlias = true
+    }
+
+    private val magnifierCrossPaint = Paint().apply {
+        color = Color.parseColor("#FF3B30")
+        strokeWidth = 3f
+        style = Paint.Style.STROKE
+        isAntiAlias = true
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_crop)
@@ -81,10 +102,18 @@ class CropActivity : AppCompatActivity() {
         originalBitmap = matToBitmap(mat)
         mat.release()
 
+        val hadCorners = intent.hasExtra("corners") ||
+                (savedInstanceState?.containsKey("corners") == true)
+
         initCorners(savedInstanceState)
 
         imageView.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             updateDisplay()
+        }
+
+        // Если углы не были переданы — попробуем найти документ автоматически
+        if (!hadCorners) {
+            imageView.post { autoDetectCorners() }
         }
 
         setupButtons()
@@ -121,12 +150,11 @@ class CropActivity : AppCompatActivity() {
     }
 
     private fun initDefaultCorners() {
-        val marginX = originalBitmap.width * 0.1f
-        val marginY = originalBitmap.height * 0.1f
-        corners[0] = PointF(marginX, marginY)
-        corners[1] = PointF(originalBitmap.width - marginX, marginY)
-        corners[2] = PointF(originalBitmap.width - marginX, originalBitmap.height - marginY)
-        corners[3] = PointF(marginX, originalBitmap.height - marginY)
+        // Углы по краям фото — показывают всё изображение без обрезки
+        corners[0] = PointF(0f, 0f)
+        corners[1] = PointF(originalBitmap.width.toFloat(), 0f)
+        corners[2] = PointF(originalBitmap.width.toFloat(), originalBitmap.height.toFloat())
+        corners[3] = PointF(0f, originalBitmap.height.toFloat())
     }
 
     private fun setupButtons() {
@@ -271,10 +299,100 @@ class CropActivity : AppCompatActivity() {
             }
         }
 
+        // Лупа при перетаскивании угла
+        if (activeCorner >= 0) {
+            drawMagnifier(canvas, activeCorner, scale)
+        }
+
         val oldBitmap = displayBitmap
         imageView.setImageBitmap(newBitmap)
         oldBitmap?.recycle()
         displayBitmap = newBitmap
+    }
+
+    /**
+     * Рисует круговую лупу с увеличением области вокруг активного угла.
+     */
+    private fun drawMagnifier(canvas: Canvas, cornerIndex: Int, viewScale: Float) {
+        val density = resources.displayMetrics.density
+        val radiusPx = 60 * density          // радиус лупы 60dp
+        val offsetPx = 90 * density          // отступ от угла
+        val zoom = 3f                        // кратность увеличения
+
+        val cornerViewX = scaledCorners[cornerIndex].x
+        val cornerViewY = scaledCorners[cornerIndex].y
+
+        // Позиция лупы: над углом, если место есть; иначе под углом
+        val cx: Float
+        val cy: Float
+        if (cornerViewY - offsetPx - radiusPx > 0) {
+            cx = cornerViewX
+            cy = cornerViewY - offsetPx
+        } else {
+            cx = cornerViewX
+            cy = cornerViewY + offsetPx
+        }
+
+        // Не выходим за края холста
+        val padding = radiusPx + 8
+        val clampedCx = cx.coerceIn(padding, canvas.width - padding)
+        val clampedCy = cy.coerceIn(padding, canvas.height - padding)
+
+        // Сохраняем состояние canvas
+        canvas.save()
+
+        // Обрезаем область по кругу
+        val clipPath = android.graphics.Path().apply {
+            addCircle(clampedCx, clampedCy, radiusPx, android.graphics.Path.Direction.CW)
+        }
+        canvas.clipPath(clipPath)
+
+        // Определяем, какую часть оригинала показываем
+        // Центр — координаты угла в оригинальном изображении
+        val origCx = corners[cornerIndex].x
+        val origCy = corners[cornerIndex].y
+
+        // Ширина/высота области оригинала, которая попадает в лупу
+        val srcSize = (radiusPx * 2f) / viewScale / zoom
+
+        // Источник — Rect (целые координаты), т.к. drawBitmap требует именно его
+        val srcRect = android.graphics.Rect(
+            (origCx - srcSize / 2f).toInt(),
+            (origCy - srcSize / 2f).toInt(),
+            (origCx + srcSize / 2f).toInt(),
+            (origCy + srcSize / 2f).toInt()
+        )
+
+        // Назначение — RectF (дробные координаты для плавности)
+        val destRect = android.graphics.RectF(
+            clampedCx - radiusPx,
+            clampedCy - radiusPx,
+            clampedCx + radiusPx,
+            clampedCy + radiusPx
+        )
+
+        canvas.drawBitmap(originalBitmap, srcRect, destRect, null)
+
+        // Крестик по центру лупы — показывает точное положение угла
+        val crossSize = 14f * density
+        canvas.drawLine(
+            clampedCx - crossSize, clampedCy,
+            clampedCx + crossSize, clampedCy,
+            magnifierCrossPaint
+        )
+        canvas.drawLine(
+            clampedCx, clampedCy - crossSize,
+            clampedCx, clampedCy + crossSize,
+            magnifierCrossPaint
+        )
+
+        canvas.restore()
+
+        // Тень вокруг лупы (снаружи)
+        canvas.drawCircle(clampedCx, clampedCy, radiusPx + 4f, magnifierShadowPaint)
+
+        // Белая обводка лупы
+        canvas.drawCircle(clampedCx, clampedCy, radiusPx, magnifierBorderPaint)
     }
 
     private fun autoDetectCorners() {

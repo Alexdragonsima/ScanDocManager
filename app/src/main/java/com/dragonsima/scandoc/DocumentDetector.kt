@@ -763,7 +763,7 @@ object DocumentDetector {
             Core.add(diff, Scalar(64.0), diff)
 
             // Локальный контраст
-            clahe = Imgproc.createCLAHE(2.5, Size(8.0, 8.0))
+            clahe = Imgproc.createCLAHE(2.1, Size(8.0, 8.0))
             clahe.apply(diff, diff)
 
             // Нормализация
@@ -871,7 +871,7 @@ object DocumentDetector {
 
         val labChannels = mutableListOf<Mat>()
         Core.split(lab, labChannels)
-        val clahe = Imgproc.createCLAHE(1.8, Size(8.0, 8.0))
+        val clahe = Imgproc.createCLAHE(1.4, Size(8.0, 8.0))
         clahe.apply(labChannels[0], labChannels[0])
         clahe.clear()
 
@@ -1192,7 +1192,9 @@ object DocumentDetector {
         val blurred = Mat()
         Imgproc.GaussianBlur(contrastEnhanced, blurred, Size(0.0, 0.0), 1.5)
         val result = Mat()
-        Core.addWeighted(contrastEnhanced, 1.6, blurred, -0.6, 0.0, result)
+        Core.addWeighted(contrastEnhanced, 1.4, blurred, -0.4, 0.0, result)
+
+
 
         blurred.release()
         contrastEnhanced.release()

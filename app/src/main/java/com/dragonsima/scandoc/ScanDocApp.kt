@@ -2,28 +2,24 @@ package com.dragonsima.scandoc
 
 import android.app.Application
 import androidx.appcompat.app.AppCompatDelegate
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 
-/**
- * Application-класс приложения.
- * Применяет сохранённую тему до создания первой активити.
- */
 class ScanDocApp : Application() {
 
     companion object {
-        /** Установлен ли флаг разблокировки в текущей сессии. */
         @Volatile
         var isUnlocked: Boolean = false
     }
 
     override fun onCreate() {
         super.onCreate()
+
+        // Инициализация PDFBox (обязательно до первого использования)
+        PDFBoxResourceLoader.init(applicationContext)
+
         applySavedTheme()
     }
 
-    /**
-     * Читает тему из SharedPreferences и применяет её глобально.
-     * Вызывается один раз при старте приложения.
-     */
     private fun applySavedTheme() {
         val prefs = getSharedPreferences(SettingsActivity.PREFS_SETTINGS, MODE_PRIVATE)
         val theme = prefs.getString(SettingsActivity.KEY_THEME, "system") ?: "system"

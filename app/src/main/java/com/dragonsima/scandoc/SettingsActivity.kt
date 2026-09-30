@@ -29,6 +29,7 @@ class SettingsActivity : AppCompatActivity() {
         const val KEY_DEFAULT_FORMAT = "default_format"    // "pdf" | "jpg"
         const val KEY_PDF_QUALITY = "pdf_quality"          // "high" | "medium" | "low"
         const val KEY_AUTO_ROTATE = "auto_rotate"          // Boolean
+        const val KEY_SAVE_FOLDER_URI = "save_folder_uri"
     }
 
     private lateinit var prefs: android.content.SharedPreferences
@@ -40,6 +41,27 @@ class SettingsActivity : AppCompatActivity() {
             ScanDocApp.isUnlocked = true
         }
         refreshValues()
+    }
+
+    private val folderPickerLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK && result.data?.data != null) {
+            val uri = result.data!!.data!!
+            try {
+                // Сохраняем разрешение на постоянный доступ
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                            android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+                prefs.edit { putString(SettingsActivity.KEY_SAVE_FOLDER_URI, uri.toString()) }
+                Toast.makeText(this, getString(R.string.settings_save_folder_copied, uri.lastPathSegment ?: ""), Toast.LENGTH_SHORT).show()
+                refreshValues()
+            } catch (e: Exception) {
+                Toast.makeText(this, getString(R.string.settings_save_folder_error), Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -78,6 +100,11 @@ class SettingsActivity : AppCompatActivity() {
             setOnCheckedChangeListener { _, value ->
                 prefs.edit { putBoolean(KEY_AUTO_ROTATE, value) }
             }
+        }
+
+        // === ПАПКА СОХРАНЕНИЯ ===
+        findViewById<android.view.View>(R.id.saveFolderRow).setOnClickListener {
+            showSaveFolderDialog()
         }
 
         // === ДАННЫЕ ===
@@ -194,6 +221,67 @@ class SettingsActivity : AppCompatActivity() {
             }
             .setNegativeButton(getString(R.string.common_cancel), null)
             .show()
+    }
+
+    // ==================== ПАПКА СОХРАНЕНИЯ ====================
+
+    private fun showSaveFolderDialog() {
+        val currentUri = prefs.getString(SettingsActivity.KEY_SAVE_FOLDER_URI, null)
+
+        if (currentUri == null) {
+            // Папка не выбрана — просто открываем SAF-диалог
+            launchFolderPicker()
+        } else {
+            // Папка выбрана — предлагаем сменить или отвязать
+            val options = arrayOf(
+                getString(R.string.settings_save_folder_pick),
+                getString(R.string.settings_save_folder_unlink)
+            )
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle(getString(R.string.settings_save_folder_title))
+                .setItems(options) { _, which ->
+                    when (which) {
+                        0 -> launchFolderPicker()
+                        1 -> unlinkFolder()
+                    }
+                }
+                .setNegativeButton(getString(R.string.common_cancel), null)
+                .show()
+        }
+    }
+
+    private fun launchFolderPicker() {
+        // Показываем описание перед выбором
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(getString(R.string.settings_save_folder_title))
+            .setMessage(getString(R.string.settings_save_folder_description))
+            .setPositiveButton(getString(R.string.settings_save_folder_pick)) { _, _ ->
+                val intent = android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                    addFlags(
+                        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                                android.content.Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                    )
+                }
+                folderPickerLauncher.launch(intent)
+            }
+            .setNegativeButton(getString(R.string.common_cancel), null)
+            .show()
+    }
+
+    private fun unlinkFolder() {
+        val uriStr = prefs.getString(SettingsActivity.KEY_SAVE_FOLDER_URI, null) ?: return
+        try {
+            val uri = android.net.Uri.parse(uriStr)
+            contentResolver.releasePersistableUriPermission(
+                uri,
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        } catch (_: Exception) { }
+        prefs.edit { remove(SettingsActivity.KEY_SAVE_FOLDER_URI) }
+        Toast.makeText(this, getString(R.string.settings_save_folder_unlinked), Toast.LENGTH_SHORT).show()
+        refreshValues()
     }
 
     // ==================== ДАННЫЕ ====================
@@ -327,6 +415,19 @@ class SettingsActivity : AppCompatActivity() {
             getString(R.string.settings_pin_enabled)
         } else {
             getString(R.string.settings_pin_disabled)
+        }
+
+        // Папка сохранения
+        val folderUri = prefs.getString(SettingsActivity.KEY_SAVE_FOLDER_URI, null)
+        findViewById<TextView>(R.id.saveFolderValueText).text = if (folderUri == null) {
+            getString(R.string.settings_save_folder_default)
+        } else {
+            // Показываем читаемую часть URI
+            val decoded = android.net.Uri.decode(folderUri)
+            val display = decoded.substringAfterLast(":").ifEmpty {
+                decoded.substringAfterLast("/")
+            }
+            display
         }
 
         refreshStats()

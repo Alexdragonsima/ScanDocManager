@@ -58,6 +58,8 @@
     <string name="camera_camera_start_error">Не удалось запустить камеру</string>
     <string name="camera_ocr_failed">Текст не распознан</string>
     <string name="camera_ocr_error">Ошибка OCR: %s</string>
+    <string name="camera_processing">Обработка…</string>
+    <string name="camera_detecting_orientation">Определяем ориентацию…</string>
 
     <!-- HDR -->
     <string name="hdr_not_enough_ev">Недостаточно доступных значений EV для HDR</string>
@@ -108,6 +110,7 @@
     <string name="save_multi_jpg_saved">✅ Сохранено страниц: %d</string>
     <string name="save_open_first">Открыть первую</string>
     <string name="save_share_all">Поделиться всеми</string>
+    <string name="saved_dialog_protect">Защитить паролем</string>
 
     <!-- Поворот -->
     <string name="rotate_title">Повернуть изображение</string>
@@ -175,6 +178,14 @@
     <string name="ocr_share">Поделиться</string>
     <string name="ocr_share_title">Поделиться текстом</string>
     <string name="ocr_share_subject">Распознанный текст</string>
+    <string name="ocr_save_txt">Сохранить как TXT</string>
+    <string name="ocr_save_docx">Сохранить как DOCX</string>
+    <string name="ocr_save_title">Сохранить текст</string>
+    <string name="ocr_saved_txt">✅ TXT сохранён: %s</string>
+    <string name="ocr_saved_docx">✅ DOCX сохранён: %s</string>
+    <string name="ocr_save_error">Ошибка сохранения: %s</string>
+    <string name="ocr_share_file">Поделиться файлом</string>
+    <string name="ocr_open_file">Открыть</string>
 
     <!-- ============ DocumentActions ============ -->
     <string name="actions_no_viewer_pdf">Нет программы для просмотра PDF</string>
@@ -298,5 +309,29 @@
     <string name="settings_pin_action_change">Сменить PIN-код</string>
     <string name="settings_pin_dialog_title">PIN-код</string>
     <string name="settings_section_security">Безопасность</string>
+
+    <!-- PDF Protection -->
+    <string name="pdf_protect_title">Защитить PDF</string>
+    <string name="pdf_protect_subtitle">Пароль потребуется при каждом открытии файла</string>
+    <string name="pdf_protect_password_hint">Пароль</string>
+    <string name="pdf_protect_password_error">Введите пароль (мин. 4 символа)</string>
+    <string name="pdf_protect_warning">⚠️ Если вы забудете пароль — восстановить доступ к файлу не получится. Запишите его в надёжном месте.</string>
+    <string name="pdf_protect_button">Защитить</string>
+    <string name="pdf_protect_processing">Шифрование…</string>
+    <string name="pdf_protect_success">✅ PDF защищён паролем</string>
+    <string name="pdf_protect_error">Ошибка: %s</string>
+    <string name="pdf_protect_menu">Защитить паролем</string>
+    <string name="pdf_protect_open">Открыть защищённый PDF</string>
+
+    <!-- SAF / Папка сохранения -->
+    <string name="settings_save_folder">Папка сохранения</string>
+    <string name="settings_save_folder_default">Внутри приложения</string>
+    <string name="settings_save_folder_title">Выбрать папку</string>
+    <string name="settings_save_folder_description">Копия каждого документа будет сохраняться в выбранную папку. Документы не потеряются при удалении приложения.</string>
+    <string name="settings_save_folder_pick">Выбрать папку</string>
+    <string name="settings_save_folder_unlink">Отвязать</string>
+    <string name="settings_save_folder_unlinked">Папка отвязана</string>
+    <string name="settings_save_folder_error">Не удалось получить доступ к папке</string>
+    <string name="settings_save_folder_copied">Файлы будут сохраняться в: %s</string>
 
 </resources>

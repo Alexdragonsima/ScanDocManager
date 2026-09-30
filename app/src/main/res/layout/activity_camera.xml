@@ -102,6 +102,17 @@
                 android:layout_gravity="center"
                 android:visibility="gone" />
 
+            <TextView
+                android:id="@+id/progressText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:layout_marginTop="72dp"
+                android:text="@string/camera_processing"
+                android:textColor="@color/white"
+                android:textSize="12sp"
+                android:visibility="gone" />
+
             <!-- Кнопка съёмки (видна только в режиме камеры) -->
             <com.google.android.material.floatingactionbutton.FloatingActionButton
                 android:id="@+id/captureButton"

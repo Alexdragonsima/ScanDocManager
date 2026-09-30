@@ -79,11 +79,20 @@
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/shareTextButton"
-            style="@style/Widget.MaterialComponents.Button.TextButton"
+            style="@style/Widget.Material3.Button.TextButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Поделиться"
+            android:text="@string/ocr_share"
             android:textColor="@color/primary_color"
+            app:cornerRadius="20dp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/saveButton"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:text="@string/ocr_save_title"
             app:cornerRadius="20dp" />
 
         <com.google.android.material.button.MaterialButton
@@ -91,7 +100,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
-            android:text="Копировать всё"
+            android:text="@string/ocr_copy_all"
             android:textColor="@color/white"
             app:backgroundTint="@color/primary_color"
             app:cornerRadius="20dp" />

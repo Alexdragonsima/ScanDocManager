@@ -315,19 +315,20 @@ object FileManager {
     fun matToBitmap(mat: Mat): Bitmap {
         require(!mat.empty()) { "Mat пустой" }
 
-        val needsConversion = mat.channels() == 1
-        val targetMat = if (needsConversion) {
-            Mat().also { tmp ->
-                Imgproc.cvtColor(mat, tmp, Imgproc.COLOR_GRAY2BGR)
-            }
-        } else mat
+        val rgbaMat = Mat()
+        when (mat.channels()) {
+            1 -> Imgproc.cvtColor(mat, rgbaMat, Imgproc.COLOR_GRAY2RGBA)
+            3 -> Imgproc.cvtColor(mat, rgbaMat, Imgproc.COLOR_BGR2RGBA)
+            4 -> mat.copyTo(rgbaMat)
+            else -> throw IllegalArgumentException("Unsupported channels: ${mat.channels()}")
+        }
 
         try {
-            val bitmap = Bitmap.createBitmap(targetMat.cols(), targetMat.rows(), Bitmap.Config.ARGB_8888)
-            Utils.matToBitmap(targetMat, bitmap)
+            val bitmap = Bitmap.createBitmap(rgbaMat.cols(), rgbaMat.rows(), Bitmap.Config.ARGB_8888)
+            Utils.matToBitmap(rgbaMat, bitmap)
             return bitmap
         } finally {
-            if (needsConversion) targetMat.release()
+            rgbaMat.release()
         }
     }
 
@@ -511,9 +512,9 @@ object FileManager {
      * @param pdfName имя PDF-файла (с расширением), например "20250101_120000.pdf"
      * @param text распознанный текст
      */
-    fun saveIndexForPdf(context: Context, pdfName: String, text: String) {
+    fun saveIndexForFile(context: Context, fileName: String, text: String) {
         if (text.isBlank()) return
-        val baseName = pdfName.substringBeforeLast(".pdf")
+        val baseName = fileName.substringBeforeLast(".")
         val indexFile = File(context.filesDir, "$INDICES_FOLDER/$baseName.txt")
         try {
             indexFile.writeText(text, Charsets.UTF_8)
@@ -523,11 +524,8 @@ object FileManager {
         }
     }
 
-    /**
-     * Читает текст-индекс для PDF. Возвращает null, если индекса нет.
-     */
-    fun getIndexForPdf(context: Context, pdfName: String): String? {
-        val baseName = pdfName.substringBeforeLast(".pdf")
+    fun getIndexForFile(context: Context, fileName: String): String? {
+        val baseName = fileName.substringBeforeLast(".")
         val indexFile = File(context.filesDir, "$INDICES_FOLDER/$baseName.txt")
         if (!indexFile.exists()) return null
         return try {
@@ -538,21 +536,15 @@ object FileManager {
         }
     }
 
-    /**
-     * Удаляет индекс при удалении PDF.
-     */
-    fun deleteIndexForPdf(context: Context, pdfName: String) {
-        val baseName = pdfName.substringBeforeLast(".pdf")
+    fun deleteIndexForFile(context: Context, fileName: String) {
+        val baseName = fileName.substringBeforeLast(".")
         val indexFile = File(context.filesDir, "$INDICES_FOLDER/$baseName.txt")
         if (indexFile.exists()) indexFile.delete()
     }
 
-    /**
-     * Переименовывает индекс.
-     */
-    fun renameIndexForPdf(context: Context, oldPdfName: String, newPdfName: String) {
-        val oldBase = oldPdfName.substringBeforeLast(".pdf")
-        val newBase = newPdfName.substringBeforeLast(".pdf")
+    fun renameIndexForFile(context: Context, oldFileName: String, newFileName: String) {
+        val oldBase = oldFileName.substringBeforeLast(".")
+        val newBase = newFileName.substringBeforeLast(".")
         val oldFile = File(context.filesDir, "$INDICES_FOLDER/$oldBase.txt")
         if (!oldFile.exists()) return
         val newFile = File(context.filesDir, "$INDICES_FOLDER/$newBase.txt")
@@ -566,13 +558,23 @@ object FileManager {
     fun searchInIndices(context: Context, query: String): Map<String, Int> {
         if (query.isBlank()) return emptyMap()
         val indicesDir = File(context.filesDir, INDICES_FOLDER)
-        if (!indicesDir.exists()) return emptyMap()
+        val docsDir = File(context.filesDir, DOCUMENTS_FOLDER)
+        if (!indicesDir.exists() || !docsDir.exists()) return emptyMap()
 
         val lowerQuery = query.lowercase(Locale.getDefault())
         val result = mutableMapOf<String, Int>()
+        val allowedExtensions = listOf("pdf", "txt", "docx")
 
         indicesDir.listFiles { f -> f.extension == "txt" }?.forEach { indexFile ->
             try {
+                val baseName = indexFile.nameWithoutExtension
+
+                // Ищем реальный файл в Documents
+                val realFile = allowedExtensions
+                    .map { File(docsDir, "$baseName.$it") }
+                    .firstOrNull { it.exists() }
+                    ?: return@forEach
+
                 val text = indexFile.readText(Charsets.UTF_8).lowercase(Locale.getDefault())
                 var count = 0
                 var idx = 0
@@ -583,14 +585,104 @@ object FileManager {
                     idx += lowerQuery.length
                 }
                 if (count > 0) {
-                    val pdfName = "${indexFile.nameWithoutExtension}.pdf"
-                    result[pdfName] = count
+                    result[realFile.name] = count
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Ошибка чтения индекса ${indexFile.name}", e)
             }
         }
         return result
+    }
+
+    // ============= SAF: КОПИРОВАНИЕ В ВЫБРАННУЮ ПАПКУ =============
+
+    /**
+     * Копирует файл в SAF-папку, выбранную пользователем в настройках.
+     * Если папка не выбрана — ничего не делает.
+     * Возвращает true при успехе, false если папки нет или ошибка.
+     */
+    fun copyToSaveFolderIfSet(context: Context, sourceFile: File): Boolean {
+        val prefs = context.getSharedPreferences(SettingsActivity.PREFS_SETTINGS, Context.MODE_PRIVATE)
+        val uriString = prefs.getString(SettingsActivity.KEY_SAVE_FOLDER_URI, null) ?: return false
+
+        return try {
+            val treeUri = android.net.Uri.parse(uriString)
+            val parentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, treeUri)
+                ?: return false
+
+            // Проверяем, нет ли уже такого файла, и удаляем (перезапись)
+            val existing = parentDoc.findFile(sourceFile.name)
+            existing?.delete()
+
+            // Создаём новый файл
+            val mime = mimeOf(sourceFile)
+            val newDoc = parentDoc.createFile(mime, sourceFile.name)
+                ?: return false
+
+            context.contentResolver.openOutputStream(newDoc.uri)?.use { out ->
+                sourceFile.inputStream().use { input ->
+                    input.copyTo(out)
+                }
+            }
+
+            Log.d(TAG, "Файл скопирован в SAF-папку: ${sourceFile.name}")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Ошибка копирования в SAF: ${e.message}", e)
+            false
+        }
+    }
+
+    /**
+     * MIME-тип по расширению файла.
+     */
+    private fun mimeOf(file: File): String {
+        return when (file.extension.lowercase()) {
+            "pdf" -> "application/pdf"
+            "txt" -> "text/plain"
+            "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            "jpg", "jpeg" -> "image/jpeg"
+            "png" -> "image/png"
+            else -> "*/*"
+        }
+    }
+
+    /**
+     * Удаляет копию файла из SAF-папки (если папка выбрана).
+     */
+    fun deleteFromSaveFolderIfSet(context: Context, fileName: String) {
+        val prefs = context.getSharedPreferences(SettingsActivity.PREFS_SETTINGS, Context.MODE_PRIVATE)
+        val uriString = prefs.getString(SettingsActivity.KEY_SAVE_FOLDER_URI, null) ?: return
+
+        try {
+            val treeUri = android.net.Uri.parse(uriString)
+            val parentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, treeUri)
+                ?: return
+            val doc = parentDoc.findFile(fileName) ?: return
+            val deleted = doc.delete()
+            Log.d(TAG, "SAF-удаление $fileName: $deleted")
+        } catch (e: Exception) {
+            Log.e(TAG, "Ошибка SAF-удаления: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Переименовывает копию файла в SAF-папке.
+     */
+    fun renameInSaveFolderIfSet(context: Context, oldName: String, newName: String) {
+        val prefs = context.getSharedPreferences(SettingsActivity.PREFS_SETTINGS, Context.MODE_PRIVATE)
+        val uriString = prefs.getString(SettingsActivity.KEY_SAVE_FOLDER_URI, null) ?: return
+
+        try {
+            val treeUri = android.net.Uri.parse(uriString)
+            val parentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, treeUri)
+                ?: return
+            val doc = parentDoc.findFile(oldName) ?: return
+            val renamed = doc.renameTo(newName)
+            Log.d(TAG, "SAF-переименование $oldName → $newName: $renamed")
+        } catch (e: Exception) {
+            Log.e(TAG, "Ошибка SAF-переименования: ${e.message}", e)
+        }
     }
 
     /**
