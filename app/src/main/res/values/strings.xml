@@ -1,46 +1,37 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">ScanDoc</string>
 
-    <!-- ============ Общие ============ -->
+    <!-- ============ ОБЩИЕ ============ -->
+    <string name="app_name">ScanDoc</string>
     <string name="common_cancel">Отмена</string>
     <string name="common_ok">ОК</string>
     <string name="common_done">Готово</string>
-    <string name="common_save">Сохранить</string>
     <string name="common_delete">Удалить</string>
     <string name="common_share">Поделиться</string>
     <string name="common_open">Открыть</string>
-    <string name="common_close">Закрыть</string>
-    <string name="common_retry">Повторить</string>
     <string name="common_error">Ошибка</string>
-    <string name="common_loading">Загрузка…</string>
 
-    <!-- ============ MainActivity ============ -->
-    <string name="main_greeting">Привет! Готовы сканировать?</string>
+    <!-- ============ MAIN ACTIVITY ============ -->
+    <string name="main_greeting_morning">Доброе утро! Готовы сканировать?</string>
+    <string name="main_greeting_day">Добрый день! Готовы сканировать?</string>
+    <string name="main_greeting_evening">Добрый вечер! Готовы сканировать?</string>
+    <string name="main_greeting_night">Доброй ночи! Работаем?</string>
     <string name="main_scan_title">Сканировать документ</string>
     <string name="main_scan_subtitle">Одностраничный скан</string>
     <string name="main_multi_title">Многостраничный скан</string>
     <string name="main_multi_subtitle">Несколько страниц в один PDF</string>
     <string name="main_recent_title">Мои документы</string>
     <string name="main_all_documents">Все документы →</string>
+    <string name="main_empty_title">Пока нет документов</string>
     <string name="main_empty_recent">Отсканируйте первый — он появится здесь</string>
-    <string name="main_title">ScanDoc</string>
-    <string name="main_status_ready">Готов к сканированию</string>
-    <string name="main_status_last_document">Последний документ</string>
-    <string name="main_btn_scan">📷 Сканировать документ</string>
-    <string name="main_btn_multi_scan">📚  Многостраничный скан</string>
-    <string name="main_empty_title">Нет документов</string>
-    <string name="main_empty_desc">Нажмите кнопку сканирования, чтобы создать первый документ</string>
     <string name="main_opencv_error">Ошибка загрузки OpenCV. Функция сканирования недоступна.</string>
     <string name="main_opencv_unavailable">OpenCV недоступен</string>
     <string name="main_saved_toast">Документ сохранён: %s</string>
     <string name="main_saved_file">файл</string>
-    <string name="main_greeting_morning">Доброе утро! Готовы сканировать?</string>
-    <string name="main_greeting_day">Добрый день! Готовы сканировать?</string>
-    <string name="main_greeting_evening">Добрый вечер! Готовы сканировать?</string>
-    <string name="main_greeting_night">Доброй ночи! Работаем?</string>
+    <string name="main_title">ScanDoc</string>
+    <string name="main_greeting">Привет! Готовы сканировать?</string>
 
-    <!-- ============ CameraActivity ============ -->
+    <!-- ============ CAMERA ACTIVITY ============ -->
     <string name="camera_no_permission">Нет разрешения на камеру</string>
     <string name="camera_not_ready">Камера не готова</string>
     <string name="camera_capture_error">Ошибка съёмки: %s</string>
@@ -50,10 +41,8 @@
     <string name="camera_save_error">Ошибка сохранения</string>
     <string name="camera_no_image">Нет изображения</string>
     <string name="camera_empty_image">Изображение пустое</string>
-    <string name="camera_saved_pdf">Сохранено: %s</string>
     <string name="camera_save_failed">Ошибка сохранения: %s</string>
     <string name="camera_no_image_to_crop">Нет изображения для обрезки</string>
-    <string name="camera_copy_error">Ошибка копирования</string>
     <string name="camera_process_error">Не удалось обработать</string>
     <string name="camera_camera_start_error">Не удалось запустить камеру</string>
     <string name="camera_ocr_failed">Текст не распознан</string>
@@ -62,13 +51,14 @@
     <string name="camera_detecting_orientation">Определяем ориентацию…</string>
 
     <!-- HDR -->
-    <string name="hdr_not_enough_ev">Недостаточно доступных значений EV для HDR</string>
     <string name="hdr_capture_failed">Ошибка HDR: не удалось снять кадры</string>
     <string name="hdr_not_enough_frames">Ошибка HDR: недостаточно кадров</string>
     <string name="hdr_process_failed">Ошибка обработки HDR</string>
     <string name="hdr_error">Ошибка HDR: %s</string>
     <string name="hdr_on">HDR: ВКЛ</string>
     <string name="hdr_off">HDR: ВЫКЛ</string>
+    <string name="hdr_enabled_toast">HDR включён</string>
+    <string name="hdr_disabled_toast">HDR выключен</string>
 
     <!-- ML Kit -->
     <string name="mlkit_unavailable_fallback">ML Kit недоступен. Используется OpenCV.</string>
@@ -79,10 +69,8 @@
     <string name="multi_page_added">Страница добавлена (%d)</string>
     <string name="multi_page_add_error">Ошибка добавления страницы</string>
     <string name="multi_page_no_pages">Нет страниц для сохранения</string>
-    <string name="multi_page_saved">✅ Сохранено страниц: %d</string>
-    <string name="multi_page_hint">Короткий тап — добавить.\nДолгий — переснять.\nДолгое на «Обрезать» — повернуть.</string>
-    <string name="multi_page_ready">📄 Готово: %d  ·  Готов к съёмке</string>
-    <string name="multi_page_shooting">📄 Готово: %d  ·  Снимаем стр. %d</string>
+    <string name="multi_page_hint">Короткий тап «Добавить» — новая страница.\nКнопка с ползунками — фильтры.</string>
+    <string name="multi_page_add_btn">Добавить страницу</string>
     <string name="multi_page_dialog_retake_title">Переснять снимок?</string>
     <string name="multi_page_dialog_retake_message">Текущая страница будет отброшена без сохранения.</string>
     <string name="multi_page_dialog_retake_confirm">Переснять</string>
@@ -98,36 +86,49 @@
     <!-- Шторка страниц -->
     <string name="page_list_empty">Пока нет страниц</string>
     <string name="page_list_title">Страницы (%d)</string>
-    <string name="page_list_title_with_current">Готово: %d  ·  +1 не добавлена</string>
     <string name="page_list_delete_title">Удалить страницу %d?</string>
     <string name="page_viewer_indicator">%1$d / %2$d</string>
+    <string name="pages_title">Страницы (%d)</string>
+    <string name="filters_title">Фильтры</string>
 
     <!-- Сохранение -->
     <string name="save_format_title">Формат сохранения</string>
-    <string name="save_format_pdf">📄 Сохранить как PDF</string>
-    <string name="save_format_jpg">🖼 Сохранить как JPG</string>
-    <string name="save_jpg_saved">✅ JPG сохранён</string>
-    <string name="save_multi_jpg_saved">✅ Сохранено страниц: %d</string>
+    <string name="save_format_pdf">Сохранить как PDF</string>
+    <string name="save_format_jpg">Сохранить как JPG</string>
+    <string name="save_pdf">Сохранить PDF</string>
+    <string name="save_jpg">Сохранить JPG</string>
+    <string name="save_finish_multi">Завершить и сохранить</string>
+    <string name="save_jpg_saved">JPG сохранён</string>
+    <string name="save_multi_jpg_saved">Сохранено страниц: %d</string>
     <string name="save_open_first">Открыть первую</string>
     <string name="save_share_all">Поделиться всеми</string>
-    <string name="saved_dialog_protect">Защитить паролем</string>
+
+    <!-- Меню действий (⋯) -->
+    <string name="menu_actions_title">Действия</string>
+    <string name="menu_hdr_on">HDR: ВКЛ ✓</string>
+    <string name="menu_hdr_off">HDR: ВЫКЛ</string>
+    <string name="menu_ai_scan">AI-скан (ML Kit)</string>
+    <string name="menu_format">Формат сохранения (PDF / JPG)</string>
+    <string name="menu_rotate">Повернуть</string>
+    <string name="menu_retake">Переснять без сохранения</string>
 
     <!-- Поворот -->
     <string name="rotate_title">Повернуть изображение</string>
-    <string name="rotate_left">↺  Повернуть влево (90°)</string>
-    <string name="rotate_right">↻  Повернуть вправо (90°)</string>
-    <string name="rotate_180">⟳  Повернуть на 180°</string>
+    <string name="rotate_left">Повернуть влево (90°)</string>
+    <string name="rotate_right">Повернуть вправо (90°)</string>
+    <string name="rotate_180">Повернуть на 180°</string>
     <string name="rotate_done">Повёрнуто на %d°</string>
 
-    <!-- ============ DocumentsActivity ============ -->
+    <!-- ============ DOCUMENTS ACTIVITY ============ -->
     <string name="docs_title">Мои документы</string>
     <string name="docs_search_hint">Поиск по содержимому</string>
     <string name="docs_empty">Нет документов</string>
     <string name="docs_empty_search">Ничего не найдено</string>
     <string name="docs_match_count">Совпадений: %d</string>
 
-    <string name="docs_menu_open">Открыть PDF</string>
+    <string name="docs_menu_open">Открыть</string>
     <string name="docs_menu_share">Поделиться</string>
+    <string name="docs_menu_thumbnail">Просмотр миниатюры</string>
     <string name="docs_menu_rename">Переименовать</string>
     <string name="docs_menu_delete">Удалить</string>
 
@@ -142,19 +143,17 @@
     <string name="docs_rename_empty">Имя не может быть пустым</string>
     <string name="docs_rename_forbidden">Недопустимые символы в имени</string>
     <string name="docs_rename_exists">Файл с таким именем уже существует</string>
-    <string name="docs_renamed">✅ Переименовано</string>
+    <string name="docs_renamed">Переименовано</string>
     <string name="docs_rename_error">Ошибка переименования</string>
 
     <string name="docs_sort_title">Сортировка</string>
     <string name="docs_sort_by_date">По дате</string>
     <string name="docs_sort_by_name">По имени</string>
 
-    <string name="docs_menu_thumbnail">👁 Просмотр миниатюры</string>
     <string name="docs_thumbnail_missing">Миниатюра не найдена</string>
 
+    <!-- Мультивыбор -->
     <string name="docs_selected_count">Выбрано: %d</string>
-    <string name="docs_cancel_selection">Отмена</string>
-    <string name="docs_select_all">Выделить все</string>
     <string name="docs_delete_selected_title">Удалить выбранные?</string>
     <string name="docs_delete_selected_message">Будет удалено документов: %d. Действие необратимо.</string>
     <string name="docs_deleted_count">Удалено: %d</string>
@@ -165,11 +164,11 @@
     <string name="docs_reindex_message">PDF без индекса: %d. Запустить распознавание? Это может занять несколько минут.</string>
     <string name="docs_reindex_start">Запустить</string>
     <string name="docs_reindex_all_done">Все PDF уже проиндексированы</string>
-    <string name="docs_reindex_progress_title">Индексация...</string>
+    <string name="docs_reindex_progress_title">Индексация…</string>
     <string name="docs_reindex_progress">%1$d / %2$d</string>
     <string name="docs_reindex_result">Проиндексировано: %d из %d</string>
 
-    <!-- ============ OCR Result ============ -->
+    <!-- ============ OCR RESULT ============ -->
     <string name="ocr_title">Распознанный текст</string>
     <string name="ocr_stats">Символов: %1$d  ·  Без пробелов: %2$d  ·  Слов: %3$d  ·  Строк: %4$d</string>
     <string name="ocr_empty">Текст пуст</string>
@@ -181,30 +180,28 @@
     <string name="ocr_save_txt">Сохранить как TXT</string>
     <string name="ocr_save_docx">Сохранить как DOCX</string>
     <string name="ocr_save_title">Сохранить текст</string>
-    <string name="ocr_saved_txt">✅ TXT сохранён: %s</string>
-    <string name="ocr_saved_docx">✅ DOCX сохранён: %s</string>
-    <string name="ocr_save_error">Ошибка сохранения: %s</string>
+    <string name="ocr_saved_txt">TXT сохранён: %s</string>
+    <string name="ocr_saved_docx">DOCX сохранён: %s</string>
+    <string name="ocr_saved_title">Файл сохранён</string>
+    <string name="ocr_save_error">Не удалось сохранить текст</string>
     <string name="ocr_share_file">Поделиться файлом</string>
     <string name="ocr_open_file">Открыть</string>
 
-    <!-- ============ DocumentActions ============ -->
+    <!-- ============ DOCUMENT ACTIONS ============ -->
     <string name="actions_no_viewer_pdf">Нет программы для просмотра PDF</string>
-    <string name="actions_no_viewer_image">Нет программы для просмотра</string>
+    <string name="actions_no_viewer_image">Нет программы для просмотра изображения</string>
+    <string name="actions_no_viewer_general">Нет приложения для этого типа файла</string>
     <string name="actions_share_error">Ошибка при попытке поделиться</string>
-    <string name="actions_saved_title">✅ PDF сохранён</string>
+    <string name="actions_saved_title">PDF сохранён</string>
     <string name="actions_saved_multi">%1$s\nСтраниц: %2$d</string>
-    <string name="actions_share_chooser_pdf">Поделиться</string>
-    <string name="actions_share_chooser_image">Поделиться</string>
+    <string name="saved_dialog_protect">Защитить паролем</string>
 
-    <!-- ============ SettingsActivity ============ -->
+    <!-- ============ SETTINGS ACTIVITY ============ -->
     <string name="settings_title">Настройки</string>
-    <string name="settings_dark_theme">Тёмная тема</string>
-    <string name="settings_language">Язык</string>
-    <string name="settings_onboarding">Показать обучение снова</string>
 
-    <!-- Settings -->
     <string name="settings_section_appearance">Внешний вид</string>
     <string name="settings_section_scan">Сканирование</string>
+    <string name="settings_section_security">Безопасность</string>
     <string name="settings_section_data">Данные</string>
     <string name="settings_section_app">Приложение</string>
 
@@ -216,6 +213,7 @@
 
     <string name="settings_dynamic_colors">Динамические цвета</string>
     <string name="settings_dynamic_colors_desc">Подстраиваться под обои (Android 12+)</string>
+    <string name="settings_restart_needed">Перезапустите приложение для применения</string>
 
     <string name="settings_default_format">Формат по умолчанию</string>
     <string name="settings_format_title">Формат сохранения</string>
@@ -240,21 +238,53 @@
     <string name="settings_about">О приложении</string>
     <string name="settings_show_onboarding">Показать обучение снова</string>
 
+    <!-- PIN (в настройках) -->
+    <string name="settings_pin">PIN-код</string>
+    <string name="settings_pin_disabled">Отключён</string>
+    <string name="settings_pin_enabled">Включён</string>
+    <string name="settings_pin_action_enable">Включить PIN-код</string>
+    <string name="settings_pin_action_disable">Отключить PIN-код</string>
+    <string name="settings_pin_action_change">Сменить PIN-код</string>
+    <string name="settings_pin_dialog_title">PIN-код</string>
 
-    <!-- About -->
+    <!-- SAF / Папка сохранения -->
+    <string name="settings_save_folder">Папка сохранения</string>
+    <string name="settings_save_folder_default">Внутри приложения</string>
+    <string name="settings_save_folder_title">Выбрать папку</string>
+    <string name="settings_save_folder_description">Копия каждого документа будет сохраняться в выбранную папку. Документы не потеряются при удалении приложения.</string>
+    <string name="settings_save_folder_pick">Выбрать папку</string>
+    <string name="settings_save_folder_unlink">Отвязать</string>
+    <string name="settings_save_folder_unlinked">Папка отвязана</string>
+    <string name="settings_save_folder_error">Не удалось получить доступ к папке</string>
+    <string name="settings_save_folder_copied">Файлы будут сохраняться в: %s</string>
+
+    <!-- Размеры -->
+    <string name="size_bytes">%d Б</string>
+    <string name="size_kb">%s КБ</string>
+    <string name="size_mb">%s МБ</string>
+    <string name="size_gb">%s ГБ</string>
+
+    <!-- ============ ABOUT ============ -->
     <string name="about_title">О приложении</string>
+    <string name="about_version">Версия %s</string>
     <string name="about_description">ScanDoc — мощный сканер документов с распознаванием текста, работающий полностью на устройстве. Без интернета, без рекламы, без отправки данных на сервер.</string>
 
     <string name="about_features_title">Возможности</string>
-    <string name="about_features_list">• Автоматическое определение границ документа\n• 7 режимов обработки (Ч/Б, Цветной, Тени, Резкость и др.)\n• Многостраничное сканирование\n• Распознавание текста (OCR) с поиском по содержимому\n• Экспорт в PDF и JPG\n• Светлая и тёмная темы\n• Работа полностью офлайн</string>
+    <string name="about_features_list">• Автоматическое определение границ документа\n• 7 режимов обработки (Ч/Б, Цветной, Тени, Резкость и др.)\n• Многостраничное сканирование\n• Распознавание текста (OCR) с поиском по содержимому\n• Экспорт в PDF, JPG, TXT, DOCX\n• Светлая и тёмная темы\n• Работа полностью офлайн</string>
 
     <string name="about_feedback">Обратная связь</string>
     <string name="about_privacy">Политика конфиденциальности</string>
     <string name="about_licenses">Лицензии</string>
-    <string name="about_licenses_text">ScanDoc использует следующие библиотеки с открытым исходным кодом:\n\n• OpenCV (Apache License 2.0)\n• ML Kit от Google (Apache License 2.0)\n• Material Components (Apache License 2.0)\n• Glide (BSD, MIT)\n• AndroidX (Apache License 2.0)</string>
+    <string name="about_licenses_text">ScanDoc использует следующие библиотеки с открытым исходным кодом:\n\n• OpenCV (Apache License 2.0)\n• ML Kit от Google (Apache License 2.0)\n• PdfBox-Android (Apache License 2.0)\n• Material Components (Apache License 2.0)\n• Glide (BSD, MIT)\n• AndroidX (Apache License 2.0)</string>
     <string name="about_copyright">© 2026 DragonSima\nВсе права защищены</string>
+    <string name="about_feedback_email">feedback@dragonsima.com</string>
+    <string name="about_feedback_subject">ScanDoc Feedback</string>
+    <string name="about_feedback_body">\n\n---\nВерсия: %1$s\nAndroid: %2$s</string>
+    <string name="about_privacy_url">https://dragonsima.com/privacy</string>
+    <string name="about_no_email_app">Нет почтового приложения</string>
+    <string name="about_no_browser">Не удалось открыть ссылку</string>
 
-    <!-- ============ OnboardingActivity ============ -->
+    <!-- ============ ONBOARDING ============ -->
     <string name="onboarding_next">Далее →</string>
     <string name="onboarding_start">Начать</string>
     <string name="onboarding_skip">Пропустить</string>
@@ -265,7 +295,7 @@
     <string name="onboarding_page3_title">Делитесь и храните</string>
     <string name="onboarding_page3_desc">Экспорт в Google Drive, защита PDF паролем</string>
 
-    <!-- ============ CropActivity ============ -->
+    <!-- ============ CROP ACTIVITY ============ -->
     <string name="crop_apply">Применить</string>
     <string name="crop_cancel">Отмена</string>
     <string name="crop_original">Оригинал</string>
@@ -276,11 +306,7 @@
     <string name="crop_load_error">Не удалось загрузить изображение</string>
     <string name="crop_detect_failed">Не удалось найти документ</string>
 
-    <!-- ============ Меню ============ -->
-    <string name="menu_documents">Документы</string>
-    <string name="menu_settings">Настройки</string>
-
-    <!-- PIN -->
+    <!-- ============ PIN ACTIVITY ============ -->
     <string name="pin_title">PIN-код</string>
     <string name="pin_enter_title">Введите PIN-код</string>
     <string name="pin_enter_subtitle">Введите 4-значный код для доступа</string>
@@ -295,43 +321,59 @@
     <string name="pin_set_success">PIN-код установлен</string>
     <string name="pin_disabled_success">PIN-код отключён</string>
     <string name="pin_use_biometric">Использовать отпечаток</string>
-    <string name="pin_biometric_title">Вход по отпечатку</string>
-    <string name="pin_biometric_subtitle">Приложите палец</string>
-    <string name="pin_biometric_error">Ошибка биометрии</string>
 
-    <!-- Settings PIN -->
-    <string name="settings_pin">PIN-код</string>
-    <string name="settings_pin_disabled">Отключён</string>
-    <string name="settings_pin_enabled">Включён</string>
-    <string name="settings_pin_title">PIN-код</string>
-    <string name="settings_pin_action_enable">Включить PIN-код</string>
-    <string name="settings_pin_action_disable">Отключить PIN-код</string>
-    <string name="settings_pin_action_change">Сменить PIN-код</string>
-    <string name="settings_pin_dialog_title">PIN-код</string>
-    <string name="settings_section_security">Безопасность</string>
 
-    <!-- PDF Protection -->
+    <!-- ============ PDF PROTECTION ============ -->
     <string name="pdf_protect_title">Защитить PDF</string>
     <string name="pdf_protect_subtitle">Пароль потребуется при каждом открытии файла</string>
     <string name="pdf_protect_password_hint">Пароль</string>
     <string name="pdf_protect_password_error">Введите пароль (мин. 4 символа)</string>
-    <string name="pdf_protect_warning">⚠️ Если вы забудете пароль — восстановить доступ к файлу не получится. Запишите его в надёжном месте.</string>
+    <string name="pdf_protect_warning">Если вы забудете пароль — восстановить доступ к файлу не получится. Запишите его в надёжном месте.</string>
     <string name="pdf_protect_button">Защитить</string>
     <string name="pdf_protect_processing">Шифрование…</string>
-    <string name="pdf_protect_success">✅ PDF защищён паролем</string>
-    <string name="pdf_protect_error">Ошибка: %s</string>
+    <string name="pdf_protect_success">PDF защищён паролем</string>
+    <string name="pdf_protect_error">Не удалось защитить PDF</string>
     <string name="pdf_protect_menu">Защитить паролем</string>
-    <string name="pdf_protect_open">Открыть защищённый PDF</string>
+    <string name="pdf_protect_wait">Дождитесь завершения операции</string>
 
-    <!-- SAF / Папка сохранения -->
-    <string name="settings_save_folder">Папка сохранения</string>
-    <string name="settings_save_folder_default">Внутри приложения</string>
-    <string name="settings_save_folder_title">Выбрать папку</string>
-    <string name="settings_save_folder_description">Копия каждого документа будет сохраняться в выбранную папку. Документы не потеряются при удалении приложения.</string>
-    <string name="settings_save_folder_pick">Выбрать папку</string>
-    <string name="settings_save_folder_unlink">Отвязать</string>
-    <string name="settings_save_folder_unlinked">Папка отвязана</string>
-    <string name="settings_save_folder_error">Не удалось получить доступ к папке</string>
-    <string name="settings_save_folder_copied">Файлы будут сохраняться в: %s</string>
+    <!-- ============ DRAWER MENU ============ -->
+    <string name="menu_documents">Документы</string>
+    <string name="menu_settings">Настройки</string>
+
+    <!-- Privacy Policy -->
+    <string name="privacy_title">Политика конфиденциальности</string>
+    <string name="privacy_body">ScanDoc — сканер документов, работающий полностью на вашем устройстве. Мы уважаем вашу приватность и не собираем, не храним и не передаём ваши данные.
+
+ОБРАБОТКА ДАННЫХ
+Все операции — распознавание границ, фильтры, OCR, шифрование PDF — выполняются локально на вашем устройстве. Сканы и текст никогда не отправляются на наши серверы.
+
+ЧТО МЫ НЕ СОБИРАЕМ
+• Содержимое ваших документов
+• Персональные данные
+• Геолокацию
+• Статистику использования
+• Рекламные идентификаторы
+
+РАЗРЕШЕНИЯ
+• Камера — для сканирования документов. Используется только когда вы сами открываете камеру.
+
+ЛОКАЛЬНОЕ ХРАНЕНИЕ
+Все сканы сохраняются во внутренней папке приложения на устройстве. Также копия может сохраняться в выбранную вами папку через системный диалог (SAF). Если вы выбрали облачную папку (Google Drive, Dropbox), копии будут синхронизированы в облако средствами самого облачного сервиса.
+
+УДАЛЕНИЕ ДАННЫХ
+Удаление приложения удаляет все его локальные данные. Копии в SAF-папке (например, в Downloads) остаются — удаляйте их вручную через файловый менеджер.
+
+OCR И GOOGLE ML KIT
+Для распознавания текста используется библиотека ML Kit от Google. Она работает офлайн, но при первом запуске скачивает модель через Google Play Services. Содержимое документов Google не передаётся.
+
+ЗАЩИТА
+• PIN-код хранится в виде хэша SHA-256.
+• PDF можно защитить паролем (AES-128).
+• Экраны ввода PIN и камеры защищены от скриншотов (FLAG_SECURE).
+
+КОНТАКТЫ
+По вопросам конфиденциальности: feedback@dragonsima.com
+
+Последнее обновление: октябрь 2026</string>
 
 </resources>

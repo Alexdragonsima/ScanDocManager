@@ -3,19 +3,22 @@ package com.dragonsima.scandoc
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.widget.GridLayout
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import java.security.MessageDigest
+import java.util.Locale
 
 /**
  * Экран ввода PIN-кода.
- * Работает в 4-х режимах: CREATE, CONFIRM, VERIFY, CHANGE_OLD.
+ * Работает в 4-х режимах: VERIFY, CREATE, CHANGE_OLD (внутри переключается на CREATE).
  */
 class PinActivity : AppCompatActivity() {
 
@@ -27,47 +30,70 @@ class PinActivity : AppCompatActivity() {
         const val EXTRA_MODE = "mode"
 
         const val PREFS_PIN = "pin_prefs"
-        const val KEY_PIN_HASH = "pin_hash"
+        private const val KEY_PIN_HASH = "pin_hash"
 
         const val PIN_LENGTH = 4
 
-        fun createIntent(context: Context, mode: String): Intent {
-            return Intent(context, PinActivity::class.java).apply {
+        private const val TAG = "PinActivity"
+        private const val PIN_COMPLETE_DELAY_MS = 120L
+        private const val HASH_ALGORITHM = "SHA-256"
+        private const val BACKSPACE = "⌫"
+
+        // ← ДОБАВИТЬ ЭТИ ТРИ СТРОКИ:
+        private const val STATE_MODE = "state_mode"
+        private const val STATE_FIRST_PIN = "state_first_pin"
+        private const val STATE_ENTERED_PIN = "state_entered_pin"
+
+        private val KEYPAD_LABELS = listOf(
+            "1", "2", "3",
+            "4", "5", "6",
+            "7", "8", "9",
+            "", "0", "⌫"
+        )
+
+
+        // ==================== Публичное API ====================
+
+        fun createIntent(context: Context, mode: String): Intent =
+            Intent(context, PinActivity::class.java).apply {
                 putExtra(EXTRA_MODE, mode)
             }
-        }
 
-        /** Возвращает true, если PIN установлен. */
         fun isPinSet(context: Context): Boolean {
             val prefs = context.getSharedPreferences(PREFS_PIN, Context.MODE_PRIVATE)
             return prefs.contains(KEY_PIN_HASH)
         }
 
-        /** Хэш PIN-кода (простой, для локальной защиты от любопытных глаз). */
-        private fun hashPin(pin: String): String {
-            // Простой хэш через SHA-256
-            val md = java.security.MessageDigest.getInstance("SHA-256")
-            val hash = md.digest(pin.toByteArray(Charsets.UTF_8))
-            return hash.joinToString("") { "%02x".format(it) }
-        }
-
-        /** Сохраняет PIN-код. */
         fun savePin(context: Context, pin: String) {
+            require(pin.isNotBlank()) { "PIN не может быть пустым" }
             val prefs = context.getSharedPreferences(PREFS_PIN, Context.MODE_PRIVATE)
             prefs.edit().putString(KEY_PIN_HASH, hashPin(pin)).apply()
         }
 
-        /** Проверяет PIN-код. */
         fun checkPin(context: Context, pin: String): Boolean {
+            if (pin.isBlank()) return false
             val prefs = context.getSharedPreferences(PREFS_PIN, Context.MODE_PRIVATE)
             val storedHash = prefs.getString(KEY_PIN_HASH, null) ?: return false
             return storedHash == hashPin(pin)
         }
 
-        /** Удаляет PIN-код. */
         fun clearPin(context: Context) {
             val prefs = context.getSharedPreferences(PREFS_PIN, Context.MODE_PRIVATE)
             prefs.edit().remove(KEY_PIN_HASH).apply()
+        }
+
+        // ==================== Приватное ====================
+
+        private fun hashPin(pin: String): String {
+            return try {
+                val md = MessageDigest.getInstance(HASH_ALGORITHM)
+                val bytes = md.digest(pin.toByteArray(Charsets.UTF_8))
+                bytes.joinToString("") { String.format(Locale.ROOT, "%02x", it) }
+            } catch (e: Exception) {
+                Log.e(TAG, "Не удалось захешировать PIN", e)
+                // Fallback — сам PIN как хэш (лучше, чем ничего)
+                pin.hashCode().toString()
+            }
         }
     }
 
@@ -83,27 +109,54 @@ class PinActivity : AppCompatActivity() {
     private lateinit var errorText: TextView
     private lateinit var keypad: GridLayout
 
+    // ==================== Жизненный цикл ====================
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.setFlags(
+            android.view.WindowManager.LayoutParams.FLAG_SECURE,
+            android.view.WindowManager.LayoutParams.FLAG_SECURE
+        )
         setContentView(R.layout.activity_pin)
 
-        mode = intent.getStringExtra(EXTRA_MODE) ?: MODE_VERIFY
+        // Восстанавливаем состояние при пересоздании (поворот экрана)
+        if (savedInstanceState != null) {
+            mode = savedInstanceState.getString(STATE_MODE, MODE_VERIFY)
+            firstPinForCreate = savedInstanceState.getString(STATE_FIRST_PIN)
+            savedInstanceState.getString(STATE_ENTERED_PIN)?.let { enteredPin.append(it) }
+        } else {
+            mode = intent.getStringExtra(EXTRA_MODE) ?: MODE_VERIFY
+        }
 
+        initViews()
+        setupKeypad()
+        updateTitle()
+        updateDots()
+        setupBackHandler()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(STATE_MODE, mode)
+        outState.putString(STATE_FIRST_PIN, firstPinForCreate)
+        outState.putString(STATE_ENTERED_PIN, enteredPin.toString())
+    }
+
+    // ==================== Инициализация ====================
+
+    private fun initViews() {
         dotsContainer = findViewById(R.id.pinDotsContainer)
         titleText = findViewById(R.id.pinTitleText)
         subtitleText = findViewById(R.id.pinSubtitleText)
         errorText = findViewById(R.id.pinErrorText)
         keypad = findViewById(R.id.pinKeypad)
+    }
 
-        setupKeypad()
-        updateTitle()
-        updateDots()
-
-        // Back = выход из приложения (если VERIFY) или отмена (если CREATE/CHANGE)
-        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+    private fun setupBackHandler() {
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (mode == MODE_VERIFY) {
-                    // Не даём обойти PIN
+                    // Не даём обойти PIN — сворачиваем приложение
                     moveTaskToBack(true)
                 } else {
                     setResult(RESULT_CANCELED)
@@ -135,30 +188,24 @@ class PinActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Рисует кнопки 1-9, 0, backspace и пустую ячейку.
-     */
+    // ==================== Клавиатура ====================
+
     private fun setupKeypad() {
         val density = resources.displayMetrics.density
         val buttonSize = (72 * density).toInt()
         val margin = (6 * density).toInt()
 
-        val layout = listOf(
-            "1", "2", "3",
-            "4", "5", "6",
-            "7", "8", "9",
-            "", "0", "⌫"
-        )
-
-        layout.forEach { label ->
+        KEYPAD_LABELS.forEach { label ->
             val btn = TextView(this).apply {
                 text = label
                 textSize = 24f
                 gravity = Gravity.CENTER
-                setTextColor(ContextCompat.getColor(
-                    this@PinActivity,
-                    if (label.isEmpty()) android.R.color.transparent else R.color.text_primary
-                ))
+                setTextColor(
+                    ContextCompat.getColor(
+                        this@PinActivity,
+                        if (label.isEmpty()) android.R.color.transparent else R.color.text_primary
+                    )
+                )
                 if (label.isNotEmpty()) {
                     background = ContextCompat.getDrawable(this@PinActivity, R.drawable.bg_pin_key)
                     isClickable = true
@@ -177,36 +224,33 @@ class PinActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Обработка нажатия на кнопку.
-     */
     private fun onKeyPressed(label: String) {
         errorText.visibility = View.GONE
 
         when (label) {
-            "⌫" -> {
+            BACKSPACE -> {
                 if (enteredPin.isNotEmpty()) {
                     enteredPin.deleteCharAt(enteredPin.length - 1)
                     updateDots()
                 }
             }
-            "" -> { /* пусто */ }
+            "" -> { /* пустая ячейка */ }
             else -> {
                 if (enteredPin.length < PIN_LENGTH) {
                     enteredPin.append(label)
                     updateDots()
                     if (enteredPin.length == PIN_LENGTH) {
                         // Небольшая задержка, чтобы пользователь увидел заполненные точки
-                        dotsContainer.postDelayed({ onPinComplete() }, 120)
+                        dotsContainer.postDelayed({
+                            if (isFinishing || isDestroyed) return@postDelayed
+                            onPinComplete()
+                        }, PIN_COMPLETE_DELAY_MS)
                     }
                 }
             }
         }
     }
 
-    /**
-     * Обновляет точки-индикаторы.
-     */
     private fun updateDots() {
         dotsContainer.removeAllViews()
         val density = resources.displayMetrics.density
@@ -214,8 +258,8 @@ class PinActivity : AppCompatActivity() {
         val margin = (10 * density).toInt()
 
         for (i in 0 until PIN_LENGTH) {
+            val filled = i < enteredPin.length
             val dot = View(this).apply {
-                val filled = i < enteredPin.length
                 background = ContextCompat.getDrawable(
                     this@PinActivity,
                     if (filled) R.drawable.bg_pin_dot_filled else R.drawable.bg_pin_dot_empty
@@ -228,65 +272,71 @@ class PinActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * PIN введён полностью — обрабатываем в зависимости от режима.
-     */
+    // ==================== Обработка PIN ====================
+
     private fun onPinComplete() {
         val pin = enteredPin.toString()
 
         when (mode) {
-            MODE_VERIFY -> {
-                if (checkPin(this, pin)) {
-                    ScanDocApp.isUnlocked = true
-                    setResult(RESULT_OK)
-                    finish()
-                } else {
-                    showError(getString(R.string.pin_error_wrong))
-                    enteredPin.clear()
-                    updateDots()
-                }
-            }
-            MODE_CREATE -> {
-                if (firstPinForCreate == null) {
-                    firstPinForCreate = pin
-                    enteredPin.clear()
-                    updateDots()
-                    updateTitle()
-                } else {
-                    if (firstPinForCreate == pin) {
-                        savePin(this, pin)
-                        ScanDocApp.isUnlocked = true
-                        Toast.makeText(this, getString(R.string.pin_set_success), Toast.LENGTH_SHORT).show()
-                        setResult(RESULT_OK)
-                        finish()
-                    } else {
-                        showError(getString(R.string.pin_error_mismatch))
-                        firstPinForCreate = null
-                        enteredPin.clear()
-                        updateDots()
-                        updateTitle()
-                    }
-                }
-            }
-            MODE_CHANGE_OLD -> {
-                if (checkPin(this, pin)) {
-                    ScanDocApp.isUnlocked = true
-                    mode = MODE_CREATE
-                    firstPinForCreate = null
-                    enteredPin.clear()
-                    updateDots()
-                    updateTitle()
-                } else {
-                    showError(getString(R.string.pin_error_wrong))
-                    enteredPin.clear()
-                    updateDots()
-                }
-            }
+            MODE_VERIFY -> handleVerify(pin)
+            MODE_CREATE -> handleCreate(pin)
+            MODE_CHANGE_OLD -> handleChangeOld(pin)
         }
     }
 
-    private fun showError(message: String) {
+    private fun handleVerify(pin: String) {
+        if (checkPin(this, pin)) {
+            ScanDocApp.isUnlocked = true
+            setResult(RESULT_OK)
+            finish()
+        } else {
+            showErrorAndReset(getString(R.string.pin_error_wrong))
+        }
+    }
+
+    private fun handleCreate(pin: String) {
+        if (firstPinForCreate == null) {
+            // Первый ввод — запоминаем и просим подтверждение
+            firstPinForCreate = pin
+            enteredPin.clear()
+            updateDots()
+            updateTitle()
+            return
+        }
+
+        // Второй ввод — сравниваем
+        if (firstPinForCreate == pin) {
+            savePin(this, pin)
+            ScanDocApp.isUnlocked = true
+            Toast.makeText(this, getString(R.string.pin_set_success), Toast.LENGTH_SHORT).show()
+            setResult(RESULT_OK)
+            finish()
+        } else {
+            firstPinForCreate = null
+            showErrorAndReset(getString(R.string.pin_error_mismatch))
+            updateTitle()
+        }
+    }
+
+    private fun handleChangeOld(pin: String) {
+        if (checkPin(this, pin)) {
+            ScanDocApp.isUnlocked = true
+            mode = MODE_CREATE
+            firstPinForCreate = null
+            enteredPin.clear()
+            updateDots()
+            updateTitle()
+        } else {
+            showErrorAndReset(getString(R.string.pin_error_wrong))
+        }
+    }
+
+    private fun showErrorAndReset(message: String) {
         errorText.text = message
         errorText.visibility = View.VISIBLE
+        enteredPin.clear()
+        updateDots()
     }
+
+    // ==================== Сохранение состояния ====================
 }

@@ -1,9 +1,11 @@
 package com.dragonsima.scandoc
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PointF
 import android.os.Bundle
 import android.util.Log
@@ -20,36 +22,43 @@ import org.opencv.android.Utils
 import org.opencv.core.Mat
 import org.opencv.imgcodecs.Imgcodecs
 import org.opencv.imgproc.Imgproc
-import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
+import android.annotation.SuppressLint
 
 class CropActivity : AppCompatActivity() {
 
+    // ==================== UI ====================
     private lateinit var imageView: ImageView
     private lateinit var originalBitmap: Bitmap
     private var displayBitmap: Bitmap? = null
     private var imagePath: String = ""
 
+    // ==================== Состояние углов ====================
     private val corners = Array(4) { PointF() }
+    private val scaledCorners = Array(4) { PointF() }
     private var activeCorner = -1
     private val cornerRadius = 50f
-    private val scaledCorners = Array(4) { PointF() }
 
     private val isAutoDetecting = AtomicBoolean(false)
 
+    // ==================== Кэш ресурсов ====================
+    private val density by lazy { resources.displayMetrics.density }
+    private val magnifierPath = Path()
+
+    // ==================== Paint ====================
     private val borderPaint = Paint().apply {
-        color = Color.parseColor("#4F46E5")
+        color = COLOR_PRIMARY
         strokeWidth = 6f
         style = Paint.Style.STROKE
         isAntiAlias = true
     }
     private val cornerPaint = Paint().apply {
-        color = Color.parseColor("#4F46E5")
+        color = COLOR_PRIMARY
         style = Paint.Style.FILL
         isAntiAlias = true
     }
     private val activeCornerPaint = Paint().apply {
-        color = Color.parseColor("#FF5722")
+        color = COLOR_ACTIVE
         style = Paint.Style.FILL
         isAntiAlias = true
     }
@@ -59,27 +68,26 @@ class CropActivity : AppCompatActivity() {
         strokeWidth = 4f
         isAntiAlias = true
     }
-
     private val magnifierBorderPaint = Paint().apply {
         color = Color.WHITE
         strokeWidth = 5f
         style = Paint.Style.STROKE
         isAntiAlias = true
     }
-
     private val magnifierShadowPaint = Paint().apply {
-        color = Color.parseColor("#55000000")
+        color = COLOR_MAGNIFIER_SHADOW
         strokeWidth = 12f
         style = Paint.Style.STROKE
         isAntiAlias = true
     }
-
     private val magnifierCrossPaint = Paint().apply {
-        color = Color.parseColor("#FF3B30")
+        color = COLOR_MAGNIFIER_CROSS
         strokeWidth = 3f
         style = Paint.Style.STROKE
         isAntiAlias = true
     }
+
+    // ==================== Жизненный цикл ====================
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -95,6 +103,7 @@ class CropActivity : AppCompatActivity() {
 
         val mat = Imgcodecs.imread(imagePath)
         if (mat.empty()) {
+            mat.release()
             Toast.makeText(this, getString(R.string.crop_load_error), Toast.LENGTH_SHORT).show()
             finish()
             return
@@ -107,11 +116,8 @@ class CropActivity : AppCompatActivity() {
 
         initCorners(savedInstanceState)
 
-        imageView.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-            updateDisplay()
-        }
+        imageView.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateDisplay() }
 
-        // Если углы не были переданы — попробуем найти документ автоматически
         if (!hadCorners) {
             imageView.post { autoDetectCorners() }
         }
@@ -119,6 +125,32 @@ class CropActivity : AppCompatActivity() {
         setupButtons()
         setupTouchListener()
     }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        val saved = FloatArray(8)
+        for (i in 0..3) {
+            saved[i * 2] = corners[i].x
+            saved[i * 2 + 1] = corners[i].y
+        }
+        outState.putFloatArray("corners", saved)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        displayBitmap?.let { if (!it.isRecycled) it.recycle() }
+        displayBitmap = null
+
+        if (::originalBitmap.isInitialized && !originalBitmap.isRecycled) {
+            originalBitmap.recycle()
+        }
+
+        if (::imageView.isInitialized) {
+            imageView.setImageBitmap(null)
+        }
+    }
+
+    // ==================== Инициализация углов ====================
 
     private fun initCorners(savedInstanceState: Bundle?) {
         when {
@@ -129,9 +161,7 @@ class CropActivity : AppCompatActivity() {
                         corners[i].x = saved[i * 2]
                         corners[i].y = saved[i * 2 + 1]
                     }
-                } else {
-                    initDefaultCorners()
-                }
+                } else initDefaultCorners()
             }
             intent.hasExtra("corners") -> {
                 val detected = intent.getFloatArrayExtra("corners")
@@ -140,41 +170,34 @@ class CropActivity : AppCompatActivity() {
                         corners[i].x = detected[i * 2]
                         corners[i].y = detected[i * 2 + 1]
                     }
-                    Log.d(TAG, "Получены углы из intent: ${corners.joinToString { "(${it.x.toInt()}, ${it.y.toInt()})" }}")
-                } else {
-                    initDefaultCorners()
-                }
+                    if (BuildConfig.DEBUG) logCorners("Углы из intent", corners)
+                } else initDefaultCorners()
             }
             else -> initDefaultCorners()
         }
     }
 
     private fun initDefaultCorners() {
-        // Углы по краям фото — показывают всё изображение без обрезки
         corners[0] = PointF(0f, 0f)
         corners[1] = PointF(originalBitmap.width.toFloat(), 0f)
         corners[2] = PointF(originalBitmap.width.toFloat(), originalBitmap.height.toFloat())
         corners[3] = PointF(0f, originalBitmap.height.toFloat())
     }
 
+    // ==================== Кнопки ====================
+
     private fun setupButtons() {
         findViewById<Button>(R.id.applyButton).setOnClickListener {
-            // Логируем исходные углы (как их расставил пользователь)
-            logCorners("Исходные углы", corners)
-
-            // Сортируем углы в правильном порядке (TL, TR, BR, BL)
+            if (BuildConfig.DEBUG) logCorners("Исходные", corners)
             val ordered = orderCorners(corners)
-            logCorners("Отсортированные углы", ordered)
+            if (BuildConfig.DEBUG) logCorners("Отсортированные", ordered)
 
             val result = FloatArray(8)
             for (i in 0..3) {
                 result[i * 2] = ordered[i].x
                 result[i * 2 + 1] = ordered[i].y
             }
-            val resultIntent = intent.apply {
-                putExtra("corners", result)
-            }
-            setResult(RESULT_OK, resultIntent)
+            setResult(RESULT_OK, Intent().putExtra("corners", result))
             finish()
         }
 
@@ -199,6 +222,8 @@ class CropActivity : AppCompatActivity() {
         findViewById<ImageView>(R.id.backButton).setOnClickListener { finish() }
     }
 
+    // ==================== Touch ====================
+    @SuppressLint("ClickableViewAccessibility")
     private fun setupTouchListener() {
         imageView.setOnTouchListener { _, event ->
             when (event.action) {
@@ -239,17 +264,19 @@ class CropActivity : AppCompatActivity() {
 
         corners[activeCorner].x = imgX.coerceIn(0f, originalBitmap.width.toFloat())
         corners[activeCorner].y = imgY.coerceIn(0f, originalBitmap.height.toFloat())
-        Log.d(TAG, "Перемещён угол $activeCorner → (${corners[activeCorner].x.toInt()}, ${corners[activeCorner].y.toInt()})")
     }
 
     private fun findNearestCorner(x: Float, y: Float): Int {
+        val radiusSq = cornerRadius * cornerRadius
         for (i in 0..3) {
             val dx = x - scaledCorners[i].x
             val dy = y - scaledCorners[i].y
-            if (Math.sqrt((dx * dx + dy * dy).toDouble()) < cornerRadius) return i
+            if (dx * dx + dy * dy < radiusSq) return i
         }
         return -1
     }
+
+    // ==================== Рендер ====================
 
     private fun updateDisplay() {
         val w = imageView.width
@@ -277,6 +304,7 @@ class CropActivity : AppCompatActivity() {
         )
         canvas.drawBitmap(originalBitmap, null, destRect, null)
 
+        // Рамка
         for (i in 0..3) {
             val next = (i + 1) % 4
             canvas.drawLine(
@@ -286,6 +314,7 @@ class CropActivity : AppCompatActivity() {
             )
         }
 
+        // Углы
         val baseRadius = 16f
         val activeRadius = 22f
         for (i in 0..3) {
@@ -299,10 +328,8 @@ class CropActivity : AppCompatActivity() {
             }
         }
 
-        // Лупа при перетаскивании угла
-        if (activeCorner >= 0) {
-            drawMagnifier(canvas, activeCorner, scale)
-        }
+        // Лупа
+        if (activeCorner >= 0) drawMagnifier(canvas, activeCorner, scale)
 
         val oldBitmap = displayBitmap
         imageView.setImageBitmap(newBitmap)
@@ -312,17 +339,17 @@ class CropActivity : AppCompatActivity() {
 
     /**
      * Рисует круговую лупу с увеличением области вокруг активного угла.
+     * Все координаты источника clamp'ятся в границы originalBitmap.
      */
     private fun drawMagnifier(canvas: Canvas, cornerIndex: Int, viewScale: Float) {
-        val density = resources.displayMetrics.density
-        val radiusPx = 60 * density          // радиус лупы 60dp
-        val offsetPx = 90 * density          // отступ от угла
-        val zoom = 3f                        // кратность увеличения
+        val radiusPx = 60 * density
+        val offsetPx = 90 * density
+        val zoom = 3f
 
         val cornerViewX = scaledCorners[cornerIndex].x
         val cornerViewY = scaledCorners[cornerIndex].y
 
-        // Позиция лупы: над углом, если место есть; иначе под углом
+        // Позиция лупы: над углом, если место есть; иначе под ним
         val cx: Float
         val cy: Float
         if (cornerViewY - offsetPx - radiusPx > 0) {
@@ -333,37 +360,23 @@ class CropActivity : AppCompatActivity() {
             cy = cornerViewY + offsetPx
         }
 
-        // Не выходим за края холста
         val padding = radiusPx + 8
         val clampedCx = cx.coerceIn(padding, canvas.width - padding)
         val clampedCy = cy.coerceIn(padding, canvas.height - padding)
 
-        // Сохраняем состояние canvas
-        canvas.save()
-
-        // Обрезаем область по кругу
-        val clipPath = android.graphics.Path().apply {
-            addCircle(clampedCx, clampedCy, radiusPx, android.graphics.Path.Direction.CW)
-        }
-        canvas.clipPath(clipPath)
-
-        // Определяем, какую часть оригинала показываем
-        // Центр — координаты угла в оригинальном изображении
+        // Область источника в координатах оригинала
         val origCx = corners[cornerIndex].x
         val origCy = corners[cornerIndex].y
-
-        // Ширина/высота области оригинала, которая попадает в лупу
         val srcSize = (radiusPx * 2f) / viewScale / zoom
 
-        // Источник — Rect (целые координаты), т.к. drawBitmap требует именно его
-        val srcRect = android.graphics.Rect(
-            (origCx - srcSize / 2f).toInt(),
-            (origCy - srcSize / 2f).toInt(),
-            (origCx + srcSize / 2f).toInt(),
-            (origCy + srcSize / 2f).toInt()
-        )
+        // Источник — целые координаты, CLAMP внутрь границ bitmap
+        val srcHalf = srcSize / 2f
+        val srcLeft = (origCx - srcHalf).toInt().coerceIn(0, originalBitmap.width - 1)
+        val srcTop = (origCy - srcHalf).toInt().coerceIn(0, originalBitmap.height - 1)
+        val srcRight = (origCx + srcHalf).toInt().coerceIn(srcLeft + 1, originalBitmap.width)
+        val srcBottom = (origCy + srcHalf).toInt().coerceIn(srcTop + 1, originalBitmap.height)
 
-        // Назначение — RectF (дробные координаты для плавности)
+        val srcRect = android.graphics.Rect(srcLeft, srcTop, srcRight, srcBottom)
         val destRect = android.graphics.RectF(
             clampedCx - radiusPx,
             clampedCy - radiusPx,
@@ -371,29 +384,28 @@ class CropActivity : AppCompatActivity() {
             clampedCy + radiusPx
         )
 
+        canvas.save()
+
+        // Обрезка по кругу — переиспользуем Path
+        magnifierPath.reset()
+        magnifierPath.addCircle(clampedCx, clampedCy, radiusPx, Path.Direction.CW)
+        canvas.clipPath(magnifierPath)
+
         canvas.drawBitmap(originalBitmap, srcRect, destRect, null)
 
-        // Крестик по центру лупы — показывает точное положение угла
+        // Крестик по центру
         val crossSize = 14f * density
-        canvas.drawLine(
-            clampedCx - crossSize, clampedCy,
-            clampedCx + crossSize, clampedCy,
-            magnifierCrossPaint
-        )
-        canvas.drawLine(
-            clampedCx, clampedCy - crossSize,
-            clampedCx, clampedCy + crossSize,
-            magnifierCrossPaint
-        )
+        canvas.drawLine(clampedCx - crossSize, clampedCy, clampedCx + crossSize, clampedCy, magnifierCrossPaint)
+        canvas.drawLine(clampedCx, clampedCy - crossSize, clampedCx, clampedCy + crossSize, magnifierCrossPaint)
 
         canvas.restore()
 
-        // Тень вокруг лупы (снаружи)
+        // Тень и обводка лупы
         canvas.drawCircle(clampedCx, clampedCy, radiusPx + 4f, magnifierShadowPaint)
-
-        // Белая обводка лупы
         canvas.drawCircle(clampedCx, clampedCy, radiusPx, magnifierBorderPaint)
     }
+
+    // ==================== Автодетект ====================
 
     private fun autoDetectCorners() {
         if (isAutoDetecting.getAndSet(true)) return
@@ -406,36 +418,31 @@ class CropActivity : AppCompatActivity() {
             try {
                 val detected = withContext(Dispatchers.IO) {
                     val mat = Imgcodecs.imread(imagePath)
-                    if (mat.empty()) {
-                        null
-                    } else {
-                        try {
-                            DocumentDetector.findDocumentCorners(mat)
-                        } finally {
-                            mat.release()
-                        }
-                    }
+                    if (mat.empty()) null
+                    else try { DocumentDetector.findDocumentCorners(mat) } finally { mat.release() }
                 }
 
                 if (isFinishing || isDestroyed) return@launch
 
                 if (detected != null && detected.size == 4) {
-                    val detectedPointF = Array(4) { i ->
-                        PointF(detected[i].x.toFloat(), detected[i].y.toFloat())
+                    if (BuildConfig.DEBUG) {
+                        val pts = Array(4) { PointF(detected[it].x.toFloat(), detected[it].y.toFloat()) }
+                        logCorners("Автоопределённые", pts)
                     }
-                    logCorners("Автоопределённые углы", detectedPointF)
 
-                    withContext(Dispatchers.Main) {
-                        for (i in 0..3) {
-                            corners[i].x = detected[i].x.toFloat()
-                            corners[i].y = detected[i].y.toFloat()
-                        }
-                        updateDisplay()
+                    for (i in 0..3) {
+                        corners[i].x = detected[i].x.toFloat()
+                            .coerceIn(0f, originalBitmap.width.toFloat())
+                        corners[i].y = detected[i].y.toFloat()
+                            .coerceIn(0f, originalBitmap.height.toFloat())
                     }
+                    updateDisplay()
                 } else {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(this@CropActivity, getString(R.string.crop_detect_failed), Toast.LENGTH_SHORT).show()
-                    }
+                    Toast.makeText(
+                        this@CropActivity,
+                        getString(R.string.crop_detect_failed),
+                        Toast.LENGTH_SHORT
+                    ).show()
                 }
             } finally {
                 isAutoDetecting.set(false)
@@ -443,23 +450,18 @@ class CropActivity : AppCompatActivity() {
         }
     }
 
-    // Добавьте этот метод для сортировки углов
+    // ==================== Утилиты ====================
+
     private fun orderCorners(points: Array<PointF>): Array<PointF> {
-        // Сортируем по Y
         val sortedByY = points.sortedBy { it.y }
         val top = sortedByY.take(2).sortedBy { it.x }
         val bottom = sortedByY.takeLast(2).sortedBy { it.x }
-
-        // TL, TR, BR, BL
         return arrayOf(top[0], top[1], bottom[1], bottom[0])
     }
 
-    // Добавьте метод для логирования
     private fun logCorners(prefix: String, pts: Array<PointF>) {
         val sb = StringBuilder("$prefix: ")
-        for (i in 0..3) {
-            sb.append("(${pts[i].x.toInt()}, ${pts[i].y.toInt()}) ")
-        }
+        for (i in 0..3) sb.append("(${pts[i].x.toInt()}, ${pts[i].y.toInt()}) ")
         Log.d(TAG, sb.toString())
     }
 
@@ -472,29 +474,12 @@ class CropActivity : AppCompatActivity() {
         return bitmap
     }
 
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        val saved = FloatArray(8)
-        for (i in 0..3) {
-            saved[i * 2] = corners[i].x
-            saved[i * 2 + 1] = corners[i].y
-        }
-        outState.putFloatArray("corners", saved)
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        displayBitmap?.let { bitmap ->
-            if (!bitmap.isRecycled) bitmap.recycle()
-        }
-        displayBitmap = null
-        if (::originalBitmap.isInitialized && !originalBitmap.isRecycled) {
-            originalBitmap.recycle()
-        }
-        imageView.setImageBitmap(null)
-    }
-
     companion object {
         private const val TAG = "CropActivity"
+
+        private val COLOR_PRIMARY = Color.parseColor("#4F46E5")
+        private val COLOR_ACTIVE = Color.parseColor("#FF5722")
+        private val COLOR_MAGNIFIER_SHADOW = Color.parseColor("#55000000")
+        private val COLOR_MAGNIFIER_CROSS = Color.parseColor("#FF3B30")
     }
 }

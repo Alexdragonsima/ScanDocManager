@@ -2,242 +2,160 @@ package com.dragonsima.scandoc
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.pdf.PdfDocument
 import android.util.Log
+import com.google.mlkit.vision.text.Text
 import org.opencv.android.Utils
 import org.opencv.core.Mat
+import org.opencv.core.MatOfInt
+import org.opencv.core.Size
 import org.opencv.imgcodecs.Imgcodecs
 import org.opencv.imgproc.Imgproc
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Date
+import java.util.Locale
 import kotlin.math.min
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
-import com.google.mlkit.vision.text.Text
-import org.opencv.core.MatOfInt
 
 /**
- * Управляет сохранением сканов в PDF и временными файлами.
+ * Управляет сохранением сканов в PDF/JPG, миниатюрами и индексами.
  * Все методы потокобезопасны, освобождают ресурсы и обрабатывают ошибки.
  */
 object FileManager {
 
+    private const val TAG = "FileManager"
+
+    // Папки внутри filesDir
     private const val DOCUMENTS_FOLDER = "Documents"
     private const val INDICES_FOLDER = "Indices"
     private const val THUMBNAILS_FOLDER = "Thumbnails"
-    private const val TAG = "FileManager"
 
-    /**
-     * Инициализирует необходимые папки в filesDir.
-     */
+    // Размер миниатюры
+    private const val THUMB_WIDTH = 200
+    private const val THUMB_HEIGHT = 260
+
+    // Качество JPEG
+    private const val JPEG_QUALITY = 92
+    private const val THUMB_JPEG_QUALITY = 85
+
+    // Размер A4 в точках (PDF)
+    private const val A4_WIDTH = 595
+    private const val A4_HEIGHT = 842
+
+    // ==================== ИНИЦИАЛИЗАЦИЯ ====================
+
     fun init(context: Context) {
         File(context.filesDir, DOCUMENTS_FOLDER).mkdirs()
         File(context.filesDir, THUMBNAILS_FOLDER).mkdirs()
         File(context.filesDir, INDICES_FOLDER).mkdirs()
-        Log.d(TAG, "Папки созданы")
     }
 
+    // ==================== СОХРАНЕНИЕ PDF ====================
+
     /**
-     * Сохраняет изображение (Mat) в PDF формате A4.
-     * Возвращает файл PDF.
+     * Сохраняет одно изображение в PDF формате A4 (без текстового слоя).
      */
-    fun saveToPdf(context: Context, image: Mat): File {
+    fun saveToPdf(context: Context, image: Mat): File = saveSinglePagePdf(context, image, null)
+
+    /**
+     * Сохраняет изображение в PDF с невидимым текстовым слоем.
+     * Благодаря нему PDF-ридеры могут искать, выделять и копировать текст.
+     */
+    fun saveToPdfWithText(context: Context, image: Mat, visionText: Text?): File =
+        saveSinglePagePdf(context, image, visionText)
+
+    /**
+     * Единая логика сохранения одной страницы в PDF.
+     * @param visionText null — без текстового слоя; Text — с невидимым слоем.
+     */
+    private fun saveSinglePagePdf(context: Context, image: Mat, visionText: Text?): File {
         require(!image.empty()) { "Mat пустой" }
 
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        val timestamp = newTimestamp()
         val pdfFile = File(context.filesDir, "$DOCUMENTS_FOLDER/$timestamp.pdf")
 
         val quality = getPdfQuality(context)
-        // ← уменьшаем Mat, а не Bitmap
         val resizedMat = prepareMatForPdf(image, quality)
-        // ← большая bitmap создаётся ТОЛЬКО из уменьшенного Mat
         val bitmap = matToBitmap(resizedMat)
         resizedMat.release()
 
-        // Миниатюру делаем из полного image — она всё равно 200x260
-        val thumbSource = matToBitmap(image)
+        var thumbSource: Bitmap? = null
+        var pdfDocument: PdfDocument? = null
 
         try {
-            val pdfDocument = PdfDocument()
-            val pageWidth = 595
-            val pageHeight = 842
-            val pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, 1).create()
+            thumbSource = matToBitmap(image)
+
+            pdfDocument = PdfDocument()
+            val pageInfo = PdfDocument.PageInfo.Builder(A4_WIDTH, A4_HEIGHT, 1).create()
             val page = pdfDocument.startPage(pageInfo)
             val canvas = page.canvas
 
-            val scale = min(pageWidth.toFloat() / bitmap.width, pageHeight.toFloat() / bitmap.height)
-            val scaledBitmap = Bitmap.createScaledBitmap(
-                bitmap,
-                (bitmap.width * scale).toInt(),
-                (bitmap.height * scale).toInt(),
-                true
-            )
-            val x = (pageWidth - scaledBitmap.width) / 2f
-            val y = (pageHeight - scaledBitmap.height) / 2f
+            val (scaledBitmap, x, y, scale) = drawPageIntoCanvas(canvas, bitmap)
+            try {
+                if (visionText != null) {
+                    drawInvisibleText(canvas, visionText, scale, x, y)
+                }
+                pdfDocument.finishPage(page)
 
-            canvas.drawBitmap(scaledBitmap, x, y, null)
-            pdfDocument.finishPage(page)
-
-            FileOutputStream(pdfFile).use { pdfDocument.writeTo(it) }
-            pdfDocument.close()
+                FileOutputStream(pdfFile).use { pdfDocument.writeTo(it) }
+            } finally {
+                scaledBitmap.recycle()
+            }
 
             saveThumbnail(context, thumbSource, timestamp)
-            scaledBitmap.recycle()
         } catch (e: Exception) {
             Log.e(TAG, "Ошибка при сохранении PDF", e)
             pdfFile.delete()
             throw e
         } finally {
+            pdfDocument?.close()
             bitmap.recycle()
-            thumbSource.recycle()
+            thumbSource?.let { if (!it.isRecycled) it.recycle() }
         }
 
-        Log.d(TAG, "PDF сохранён: ${pdfFile.absolutePath}")
+        if (BuildConfig.DEBUG) Log.d(TAG, "PDF сохранён: ${pdfFile.name}")
         return pdfFile
     }
 
     /**
-     * Сохраняет изображение в PDF формате A4 с невидимым текстовым слоем.
-     * Текст из ML Kit позиционируется точно по координатам boundingBox,
-     * что позволяет PDF-ридерам искать, выделять и копировать его.
-     */
-    fun saveToPdfWithText(context: Context, image: Mat, visionText: Text?): File {
-        require(!image.empty()) { "Mat пустой" }
-
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-        val pdfFile = File(context.filesDir, "$DOCUMENTS_FOLDER/$timestamp.pdf")
-
-        val quality = getPdfQuality(context)
-        val resizedMat = prepareMatForPdf(image, quality)
-        val bitmap = matToBitmap(resizedMat)
-        resizedMat.release()
-
-        val thumbSource = matToBitmap(image)
-
-        try {
-            val pdfDocument = PdfDocument()
-            val pageWidth = 595
-            val pageHeight = 842
-            val pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, 1).create()
-            val page = pdfDocument.startPage(pageInfo)
-            val canvas = page.canvas
-
-            val scale = min(pageWidth.toFloat() / bitmap.width, pageHeight.toFloat() / bitmap.height)
-            val scaledWidth = (bitmap.width * scale).toInt()
-            val scaledHeight = (bitmap.height * scale).toInt()
-            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, scaledWidth, scaledHeight, true)
-            val x = (pageWidth - scaledWidth) / 2f
-            val y = (pageHeight - scaledHeight) / 2f
-
-            canvas.drawBitmap(scaledBitmap, x, y, null)
-
-            if (visionText != null) {
-                drawInvisibleText(canvas, visionText, scale, x, y)
-            }
-
-            pdfDocument.finishPage(page)
-
-            FileOutputStream(pdfFile).use { pdfDocument.writeTo(it) }
-            pdfDocument.close()
-
-            saveThumbnail(context, thumbSource, timestamp)
-            scaledBitmap.recycle()
-        } catch (e: Exception) {
-            Log.e(TAG, "Ошибка при сохранении PDF с текстом", e)
-            pdfFile.delete()
-            throw e
-        } finally {
-            bitmap.recycle()
-            thumbSource.recycle()
-        }
-
-        Log.d(TAG, "PDF с текстовым слоем сохранён: ${pdfFile.absolutePath}")
-        return pdfFile
-    }
-
-    /**
-     * Рисует невидимый текстовый слой.
-     * alpha=1 — текст физически присутствует в PDF, но визуально невидим.
-     * Поиск и выделение в ридерах при этом работают.
-     *
-     * Координаты boundingBox приходят в пикселях bitmap, поэтому
-     * применяем ту же трансформацию (scale + offset), что и к изображению.
-     */
-    private fun drawInvisibleText(
-        canvas: Canvas,
-        visionText: Text,
-        scale: Float,
-        offsetX: Float,
-        offsetY: Float
-    ) {
-        val paint = Paint().apply {
-            color = Color.BLACK
-            alpha = 1                 // почти прозрачно — не видно глазу, но парсится
-            isAntiAlias = true
-            isSubpixelText = true     // точное позиционирование
-        }
-
-        for (block in visionText.textBlocks) {
-            for (line in block.lines) {
-                val box = line.boundingBox ?: continue
-                val text = line.text
-                if (text.isBlank()) continue
-                if (box.width() <= 0 || box.height() <= 0) continue
-
-                // Координаты в системе PDF-страницы
-                val pageX = offsetX + box.left * scale
-                val pageY = offsetY + box.top * scale
-                val pageW = box.width() * scale
-                val pageH = box.height() * scale
-
-                // Подбираем textSize так, чтобы строка вписалась в ширину бокса
-                paint.textSize = pageH * 0.9f
-                val measured = paint.measureText(text)
-                if (measured > 0f && pageW > 0f) {
-                    paint.textSize *= (pageW / measured)
-                }
-
-                // Базовая линия: низ бокса минус небольшой отступ
-                val baseline = pageY + pageH * 0.85f
-                canvas.drawText(text, pageX, baseline, paint)
-            }
-        }
-    }
-
-    /**
-     * Сохраняет список страниц в многостраничный PDF A4 с невидимым текстовым слоем.
+     * Сохраняет список страниц в многостраничный PDF A4 с текстовым слоем.
      * Если страница выгружена на диск — подгружает Mat из файла на время обработки.
      */
     fun saveBatchToPdfWithText(context: Context, pages: List<ScannedPage>): File {
         require(pages.isNotEmpty()) { "Список страниц пуст" }
 
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        val timestamp = newTimestamp()
         val pdfFile = File(context.filesDir, "$DOCUMENTS_FOLDER/batch_$timestamp.pdf")
 
         val quality = getPdfQuality(context)
-
         val pdfDocument = PdfDocument()
+
         try {
             pages.forEachIndexed { index, page ->
-                // Получаем Mat: из памяти или с диска
                 val localMat: Mat
                 val needsRelease: Boolean
-                if (page.mat != null) {
-                    localMat = page.mat
-                    needsRelease = false
-                } else if (page.filePath != null) {
-                    localMat = Imgcodecs.imread(page.filePath)
-                    if (localMat.empty()) {
-                        Log.w(TAG, "Страница ${index + 1} не загрузилась, пропуск")
+
+                when {
+                    page.mat != null -> {
+                        localMat = page.mat
+                        needsRelease = false
+                    }
+                    page.filePath != null -> {
+                        localMat = Imgcodecs.imread(page.filePath)
+                        if (localMat.empty()) {
+                            Log.w(TAG, "Страница ${index + 1} не загрузилась, пропуск")
+                            return@forEachIndexed
+                        }
+                        needsRelease = true
+                    }
+                    else -> {
+                        Log.w(TAG, "Страница ${index + 1} без данных, пропуск")
                         return@forEachIndexed
                     }
-                    needsRelease = true
-                } else {
-                    Log.w(TAG, "Страница ${index + 1} без данных, пропуск")
-                    return@forEachIndexed
                 }
 
                 try {
@@ -248,7 +166,9 @@ object FileManager {
             }
 
             FileOutputStream(pdfFile).use { pdfDocument.writeTo(it) }
-            Log.d(TAG, "Многостраничный PDF сохранён: ${pdfFile.absolutePath}, страниц: ${pages.size}")
+            if (BuildConfig.DEBUG) {
+                Log.d(TAG, "Многостраничный PDF сохранён: ${pdfFile.name}, страниц: ${pages.size}")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Ошибка при сохранении многостраничного PDF", e)
             pdfFile.delete()
@@ -257,11 +177,9 @@ object FileManager {
             pdfDocument.close()
         }
 
-        // Миниатюра — по первой странице
-        val firstPage = pages.firstOrNull()
-        val firstThumb = firstPage?.thumbnail
-        if (firstThumb != null && !firstThumb.isRecycled) {
-            saveThumbnail(context, firstThumb, "batch_$timestamp")
+        // Миниатюра по первой странице
+        pages.firstOrNull()?.thumbnail?.let { thumb ->
+            if (!thumb.isRecycled) saveThumbnail(context, thumb, "batch_$timestamp")
         }
 
         return pdfFile
@@ -273,44 +191,201 @@ object FileManager {
     private fun renderPage(
         pdfDocument: PdfDocument,
         image: Mat,
-        visionText:Text?,
+        visionText: Text?,
         pageNumber: Int,
         quality: String
     ) {
-        val pageWidth = 595
-        val pageHeight = 842
-        val pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create()
+        val pageInfo = PdfDocument.PageInfo.Builder(A4_WIDTH, A4_HEIGHT, pageNumber).create()
         val page = pdfDocument.startPage(pageInfo)
         val canvas = page.canvas
 
-        // ← уменьшаем Mat до создания Bitmap
         val resizedMat = prepareMatForPdf(image, quality)
         val bitmap = matToBitmap(resizedMat)
         resizedMat.release()
 
         try {
-            val scale = min(pageWidth.toFloat() / bitmap.width, pageHeight.toFloat() / bitmap.height)
-            val scaledWidth = (bitmap.width * scale).toInt()
-            val scaledHeight = (bitmap.height * scale).toInt()
-            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, scaledWidth, scaledHeight, true)
-            val x = (pageWidth - scaledWidth) / 2f
-            val y = (pageHeight - scaledHeight) / 2f
-
-            canvas.drawBitmap(scaledBitmap, x, y, null)
-            scaledBitmap.recycle()
-
-            if (visionText != null) {
-                drawInvisibleText(canvas, visionText, scale, x, y)
+            val (scaledBitmap, x, y, scale) = drawPageIntoCanvas(canvas, bitmap)
+            try {
+                if (visionText != null) {
+                    drawInvisibleText(canvas, visionText, scale, x, y)
+                }
+                pdfDocument.finishPage(page)
+            } finally {
+                scaledBitmap.recycle()
             }
-
-            pdfDocument.finishPage(page)
         } finally {
             bitmap.recycle()
         }
     }
+
     /**
-     * Конвертирует Mat в Bitmap.
-     * Освобождает промежуточный Mat, если он был создан.
+     * Масштабирует bitmap по пропорциям A4, центрирует и рисует в canvas.
+     * Возвращает: масштабированный bitmap, его x/y, использованный scale.
+     * Вызывающий обязан recycle()'нуть scaledBitmap.
+     */
+    private data class PageDrawResult(
+        val scaledBitmap: Bitmap,
+        val x: Float,
+        val y: Float,
+        val scale: Float
+    )
+
+    private fun drawPageIntoCanvas(canvas: Canvas, source: Bitmap): PageDrawResult {
+        val scale = min(A4_WIDTH.toFloat() / source.width, A4_HEIGHT.toFloat() / source.height)
+        val scaledWidth = (source.width * scale).toInt().coerceAtLeast(1)
+        val scaledHeight = (source.height * scale).toInt().coerceAtLeast(1)
+
+        val scaledBitmap = Bitmap.createScaledBitmap(source, scaledWidth, scaledHeight, true)
+        val x = (A4_WIDTH - scaledWidth) / 2f
+        val y = (A4_HEIGHT - scaledHeight) / 2f
+
+        canvas.drawBitmap(scaledBitmap, x, y, null)
+        return PageDrawResult(scaledBitmap, x, y, scale)
+    }
+
+    /**
+     * Рисует невидимый текстовый слой.
+     * alpha=1 — текст физически присутствует в PDF, но визуально невидим.
+     * Поиск и выделение в ридерах при этом работают.
+     */
+    private fun drawInvisibleText(
+        canvas: Canvas,
+        visionText: Text,
+        scale: Float,
+        offsetX: Float,
+        offsetY: Float
+    ) {
+        val paint = Paint().apply {
+            color = Color.BLACK
+            alpha = 1
+            isAntiAlias = true
+            isSubpixelText = true
+        }
+
+        for (block in visionText.textBlocks) {
+            for (line in block.lines) {
+                val box = line.boundingBox ?: continue
+                val text = line.text
+                if (text.isBlank()) continue
+                if (box.width() <= 0 || box.height() <= 0) continue
+
+                val pageX = offsetX + box.left * scale
+                val pageY = offsetY + box.top * scale
+                val pageW = box.width() * scale
+                val pageH = box.height() * scale
+
+                paint.textSize = pageH * 0.9f
+                val measured = paint.measureText(text)
+                if (measured > 0f && pageW > 0f) {
+                    paint.textSize *= (pageW / measured)
+                }
+
+                val baseline = pageY + pageH * 0.85f
+                canvas.drawText(text, pageX, baseline, paint)
+            }
+        }
+    }
+
+    // ==================== СОХРАНЕНИЕ JPG ====================
+
+    /**
+     * Сохраняет Mat в JPEG. Возвращает файл.
+     */
+    fun saveToJpg(context: Context, image: Mat): File {
+        require(!image.empty()) { "Mat пустой" }
+
+        val timestamp = newTimestamp()
+        val jpgFile = File(context.filesDir, "$DOCUMENTS_FOLDER/$timestamp.jpg")
+
+        if (!imwriteJpeg(jpgFile, image)) {
+            jpgFile.delete()
+            throw IllegalStateException("Не удалось сохранить JPEG: ${jpgFile.name}")
+        }
+
+        // Миниатюра
+        val bitmap = matToBitmap(image)
+        try {
+            saveThumbnail(context, bitmap, timestamp)
+        } finally {
+            bitmap.recycle()
+        }
+
+        if (BuildConfig.DEBUG) Log.d(TAG, "JPEG сохранён: ${jpgFile.name}")
+        return jpgFile
+    }
+
+    /**
+     * Сохраняет список страниц в папку Documents/jpg_<timestamp>/ как отдельные JPEG.
+     * Возвращает папку.
+     */
+    fun saveBatchToJpg(context: Context, pages: List<ScannedPage>): File {
+        require(pages.isNotEmpty()) { "Список страниц пуст" }
+
+        val timestamp = newTimestamp()
+        val folder = File(context.filesDir, "$DOCUMENTS_FOLDER/jpg_$timestamp")
+        if (!folder.exists() && !folder.mkdirs()) {
+            throw IllegalStateException("Не удалось создать папку для JPG")
+        }
+
+        pages.forEachIndexed { index, page ->
+            val localMat: Mat
+            val needsRelease: Boolean
+
+            when {
+                page.mat != null -> {
+                    localMat = page.mat
+                    needsRelease = false
+                }
+                page.filePath != null -> {
+                    localMat = Imgcodecs.imread(page.filePath)
+                    if (localMat.empty()) {
+                        Log.w(TAG, "Страница ${index + 1} не загрузилась")
+                        return@forEachIndexed
+                    }
+                    needsRelease = true
+                }
+                else -> return@forEachIndexed
+            }
+
+            try {
+                val file = File(folder, "page_${(index + 1).toString().padStart(2, '0')}.jpg")
+                if (!imwriteJpeg(file, localMat)) {
+                    Log.e(TAG, "Не удалось записать ${file.name}")
+                }
+            } finally {
+                if (needsRelease) localMat.release()
+            }
+        }
+
+        // Миниатюра по первой странице
+        pages.firstOrNull()?.thumbnail?.let { thumb ->
+            if (!thumb.isRecycled) saveThumbnail(context, thumb, "jpg_$timestamp")
+        }
+
+        if (BuildConfig.DEBUG) {
+            Log.d(TAG, "Пакет JPG сохранён: ${folder.name}, файлов: ${pages.size}")
+        }
+        return folder
+    }
+
+    /**
+     * Общий помощник записи JPEG с параметром качества.
+     * Освобождает MatOfInt сам.
+     */
+    private fun imwriteJpeg(file: File, image: Mat): Boolean {
+        val params = MatOfInt(Imgcodecs.IMWRITE_JPEG_QUALITY, JPEG_QUALITY)
+        return try {
+            Imgcodecs.imwrite(file.absolutePath, image, params)
+        } finally {
+            params.release()
+        }
+    }
+
+    // ==================== КОНВЕРТАЦИЯ ====================
+
+    /**
+     * Конвертирует Mat (BGR или grayscale) в Bitmap (ARGB).
+     * Освобождает промежуточный Mat.
      */
     fun matToBitmap(mat: Mat): Bitmap {
         require(!mat.empty()) { "Mat пустой" }
@@ -333,7 +408,7 @@ object FileManager {
     }
 
     /**
-     * Читает настройку качества PDF из SharedPreferences.
+     * Читает настройку качества PDF.
      * Возвращает "high" | "medium" | "low".
      */
     private fun getPdfQuality(context: Context): String {
@@ -341,11 +416,9 @@ object FileManager {
         return prefs.getString(SettingsActivity.KEY_PDF_QUALITY, "high") ?: "high"
     }
 
-
     /**
      * Уменьшает Mat в зависимости от качества PDF.
-     * Возвращает НОВЫЙ Mat (или клон исходного, если уменьшение не нужно).
-     * Вызывающий код должен release()'нуть результат.
+     * Возвращает НОВЫЙ Mat — вызывающий обязан release()'нуть.
      */
     private fun prepareMatForPdf(source: Mat, quality: String): Mat {
         val maxSide = when (quality) {
@@ -362,33 +435,44 @@ object FileManager {
         val newH = (source.rows() * scale).toInt().coerceAtLeast(1)
 
         val resized = Mat()
-        Imgproc.resize(source, resized, org.opencv.core.Size(newW.toDouble(), newH.toDouble()), 0.0, 0.0, Imgproc.INTER_AREA)
+        Imgproc.resize(source, resized, Size(newW.toDouble(), newH.toDouble()), 0.0, 0.0, Imgproc.INTER_AREA)
         return resized
     }
 
-    /**
-     * Конвертирует Bitmap в Mat (возвращает новый Mat).
-     */
-    fun bitmapToMat(bitmap: Bitmap): Mat {
-        val mat = Mat()
-        Utils.bitmapToMat(bitmap, mat)
-        return mat
-    }
+    // ==================== МИНИАТЮРЫ ====================
 
     /**
-     * Сохраняет Mat во временный JPEG-файл в cacheDir.
+     * Сохраняет миниатюру.
+     * ВАЖНО: если bitmap уже нужного размера, используется он сам — и НЕ recycle'ится,
+     * чтобы не ломать вызывающий код (например, PageRepository).
      */
-    fun saveTempJpeg(context: Context, image: Mat): File {
-        val file = File(context.cacheDir, "temp_${UUID.randomUUID()}.jpg")
-        if (!Imgcodecs.imwrite(file.absolutePath, image)) {
-            Log.e(TAG, "Не удалось сохранить временный JPEG")
-            throw IllegalStateException("Ошибка записи временного файла")
+    private fun saveThumbnail(context: Context, bitmap: Bitmap, name: String) {
+        val thumbFile = File(context.filesDir, "$THUMBNAILS_FOLDER/${name}_thumb.jpg")
+
+        val alreadyCorrectSize = (bitmap.width == THUMB_WIDTH && bitmap.height == THUMB_HEIGHT)
+        val scaled = if (alreadyCorrectSize) {
+            bitmap
+        } else {
+            Bitmap.createScaledBitmap(bitmap, THUMB_WIDTH, THUMB_HEIGHT, true)
         }
-        return file
+        val isSameRef = scaled === bitmap
+
+        try {
+            FileOutputStream(thumbFile).use { out ->
+                scaled.compress(Bitmap.CompressFormat.JPEG, THUMB_JPEG_QUALITY, out)
+            }
+            if (BuildConfig.DEBUG) Log.d(TAG, "Миниатюра сохранена: ${thumbFile.name}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Ошибка сохранения миниатюры", e)
+        } finally {
+            if (!isSameRef && !scaled.isRecycled) scaled.recycle()
+        }
     }
 
+    // ==================== КЭШ ====================
+
     /**
-     * Удаляет все временные файлы, созданные приложением.
+     * Удаляет временные файлы приложения из cacheDir.
      * Безопасно вызывать из любого потока.
      */
     fun cleanCache(context: Context) {
@@ -396,137 +480,36 @@ object FileManager {
         val cacheDir = context.cacheDir
         if (cacheDir.exists()) {
             cacheDir.listFiles()?.forEach { file ->
-                if (file.isFile && (
-                            file.name.startsWith("temp_") ||
-                                    file.name.startsWith("captured_") ||
-                                    file.name.startsWith("processed_") ||
-                                    file.name.startsWith("crop_temp_")
-                            )) {
+                if (file.isFile && file.name.matches(TEMP_FILE_PATTERN)) {
                     if (file.delete()) deleted++
                 }
             }
         }
-        if (deleted > 0) Log.d(TAG, "Кэш очищен: $deleted файлов")
+        if (deleted > 0 && BuildConfig.DEBUG) Log.d(TAG, "Кэш очищен: $deleted файлов")
     }
 
-    /**
-     * Сохраняет миниатюру (200x260) для предпросмотра.
-     * Входной Bitmap не освобождается внутри — за это отвечает вызывающий код.
-     */
-    private fun saveThumbnail(context: Context, bitmap: Bitmap, name: String) {
-        val thumbFile = File(context.filesDir, "$THUMBNAILS_FOLDER/${name}_thumb.jpg")
-        val scaled = Bitmap.createScaledBitmap(bitmap, 200, 260, true)
-        try {
-            FileOutputStream(thumbFile).use { out ->
-                scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
-            }
-            Log.d(TAG, "Миниатюра сохранена: ${thumbFile.absolutePath}")
-        } finally {
-            scaled.recycle()
-        }
-    }
-    /**
-     * Сохраняет Mat в JPEG. Возвращает файл.
-     */
-    fun saveToJpg(context: Context, image: Mat): File {
-        require(!image.empty()) { "Mat пустой" }
+    private val TEMP_FILE_PATTERN = Regex(
+        "^(temp_|captured_|processed_|crop_temp_|raw_|raw_hdr_|hdr_|mlkit_raw_|page_).*"
+    )
 
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-        val jpgFile = File(context.filesDir, "$DOCUMENTS_FOLDER/$timestamp.jpg")
-
-        val params = MatOfInt(Imgcodecs.IMWRITE_JPEG_QUALITY, 92)
-        val success = try {
-            Imgcodecs.imwrite(jpgFile.absolutePath, image, params)
-        } finally {
-            params.release()
-        }
-
-        // Миниатюра — как у PDF
-        val bitmap = matToBitmap(image)
-        try {
-            saveThumbnail(context, bitmap, timestamp)
-        } finally {
-            bitmap.recycle()
-        }
-
-        Log.d(TAG, "JPEG сохранён: ${jpgFile.absolutePath}")
-        return jpgFile
-    }
+    // ==================== ИНДЕКСЫ ДЛЯ ПОИСКА ====================
 
     /**
-     * Сохраняет список страниц в папку Documents/jpg_<timestamp>/ как отдельные JPEG.
-     * Возвращает папку.
-     */
-    fun saveBatchToJpg(context: Context, pages: List<ScannedPage>): File {
-        require(pages.isNotEmpty()) { "Список страниц пуст" }
-
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-        val folder = File(context.filesDir, "$DOCUMENTS_FOLDER/jpg_$timestamp")
-        if (!folder.exists() && !folder.mkdirs()) {
-            throw IllegalStateException("Не удалось создать папку для JPG")
-        }
-
-        pages.forEachIndexed { index, page ->
-            // Получаем Mat — из памяти или с диска
-            val localMat: Mat
-            val needsRelease: Boolean
-            if (page.mat != null) {
-                localMat = page.mat
-                needsRelease = false
-            } else if (page.filePath != null) {
-                localMat = Imgcodecs.imread(page.filePath)
-                if (localMat.empty()) {
-                    Log.w(TAG, "Страница ${index + 1} не загрузилась")
-                    return@forEachIndexed
-                }
-                needsRelease = true
-            } else return@forEachIndexed
-
-            try {
-                val file = File(folder, "page_${(index + 1).toString().padStart(2, '0')}.jpg")
-                val params = MatOfInt(Imgcodecs.IMWRITE_JPEG_QUALITY, 92)
-                try {
-                    Imgcodecs.imwrite(file.absolutePath, localMat, params)
-                } finally {
-                    params.release()
-                }
-            } finally {
-                if (needsRelease) localMat.release()
-            }
-        }
-
-        // Миниатюра — по первой странице
-        val firstThumb = pages.firstOrNull()?.thumbnail
-        if (firstThumb != null && !firstThumb.isRecycled) {
-            saveThumbnail(context, firstThumb, "jpg_$timestamp")
-        }
-
-        Log.d(TAG, "Пакет JPG сохранён: ${folder.absolutePath}, файлов: ${pages.size}")
-        return folder
-    }
-
-    // ============= ИНДЕКС ДЛЯ ПОИСКА =============
-
-    /**
-     * Сохраняет текст для PDF в индекс.
-     * @param pdfName имя PDF-файла (с расширением), например "20250101_120000.pdf"
-     * @param text распознанный текст
+     * Сохраняет текст в индекс для файла.
      */
     fun saveIndexForFile(context: Context, fileName: String, text: String) {
         if (text.isBlank()) return
-        val baseName = fileName.substringBeforeLast(".")
-        val indexFile = File(context.filesDir, "$INDICES_FOLDER/$baseName.txt")
+        val indexFile = File(context.filesDir, "$INDICES_FOLDER/${baseName(fileName)}.txt")
         try {
             indexFile.writeText(text, Charsets.UTF_8)
-            Log.d(TAG, "Индекс сохранён: ${indexFile.name} (${text.length} симв.)")
+            if (BuildConfig.DEBUG) Log.d(TAG, "Индекс сохранён: ${indexFile.name}")
         } catch (e: Exception) {
             Log.e(TAG, "Ошибка записи индекса: ${e.message}", e)
         }
     }
 
     fun getIndexForFile(context: Context, fileName: String): String? {
-        val baseName = fileName.substringBeforeLast(".")
-        val indexFile = File(context.filesDir, "$INDICES_FOLDER/$baseName.txt")
+        val indexFile = File(context.filesDir, "$INDICES_FOLDER/${baseName(fileName)}.txt")
         if (!indexFile.exists()) return null
         return try {
             indexFile.readText(Charsets.UTF_8)
@@ -537,26 +520,23 @@ object FileManager {
     }
 
     fun deleteIndexForFile(context: Context, fileName: String) {
-        val baseName = fileName.substringBeforeLast(".")
-        val indexFile = File(context.filesDir, "$INDICES_FOLDER/$baseName.txt")
+        val indexFile = File(context.filesDir, "$INDICES_FOLDER/${baseName(fileName)}.txt")
         if (indexFile.exists()) indexFile.delete()
     }
 
     fun renameIndexForFile(context: Context, oldFileName: String, newFileName: String) {
-        val oldBase = oldFileName.substringBeforeLast(".")
-        val newBase = newFileName.substringBeforeLast(".")
-        val oldFile = File(context.filesDir, "$INDICES_FOLDER/$oldBase.txt")
+        val oldFile = File(context.filesDir, "$INDICES_FOLDER/${baseName(oldFileName)}.txt")
         if (!oldFile.exists()) return
-        val newFile = File(context.filesDir, "$INDICES_FOLDER/$newBase.txt")
+        val newFile = File(context.filesDir, "$INDICES_FOLDER/${baseName(newFileName)}.txt")
         oldFile.renameTo(newFile)
     }
 
     /**
-     * Возвращает список имён PDF, в которых встречается запрос (без учёта регистра).
-     * Возвращает map: имя PDF -> количество совпадений.
+     * Ищет запрос во всех индексах. Возвращает map: имя файла -> число совпадений.
      */
     fun searchInIndices(context: Context, query: String): Map<String, Int> {
         if (query.isBlank()) return emptyMap()
+
         val indicesDir = File(context.filesDir, INDICES_FOLDER)
         val docsDir = File(context.filesDir, DOCUMENTS_FOLDER)
         if (!indicesDir.exists() || !docsDir.exists()) return emptyMap()
@@ -567,11 +547,12 @@ object FileManager {
 
         indicesDir.listFiles { f -> f.extension == "txt" }?.forEach { indexFile ->
             try {
-                val baseName = indexFile.nameWithoutExtension
+                val base = indexFile.nameWithoutExtension
 
                 // Ищем реальный файл в Documents
                 val realFile = allowedExtensions
-                    .map { File(docsDir, "$baseName.$it") }
+                    .asSequence()
+                    .map { File(docsDir, "$base.$it") }
                     .firstOrNull { it.exists() }
                     ?: return@forEach
 
@@ -584,9 +565,7 @@ object FileManager {
                     count++
                     idx += lowerQuery.length
                 }
-                if (count > 0) {
-                    result[realFile.name] = count
-                }
+                if (count > 0) result[realFile.name] = count
             } catch (e: Exception) {
                 Log.e(TAG, "Ошибка чтения индекса ${indexFile.name}", e)
             }
@@ -594,38 +573,39 @@ object FileManager {
         return result
     }
 
-    // ============= SAF: КОПИРОВАНИЕ В ВЫБРАННУЮ ПАПКУ =============
+    // ==================== SAF: КОПИРОВАНИЕ В ВЫБРАННУЮ ПАПКУ ====================
 
     /**
      * Копирует файл в SAF-папку, выбранную пользователем в настройках.
-     * Если папка не выбрана — ничего не делает.
-     * Возвращает true при успехе, false если папки нет или ошибка.
+     * Возвращает true при успехе.
      */
     fun copyToSaveFolderIfSet(context: Context, sourceFile: File): Boolean {
-        val prefs = context.getSharedPreferences(SettingsActivity.PREFS_SETTINGS, Context.MODE_PRIVATE)
-        val uriString = prefs.getString(SettingsActivity.KEY_SAVE_FOLDER_URI, null) ?: return false
+        val treeUri = getSaveFolderUri(context) ?: return false
 
         return try {
-            val treeUri = android.net.Uri.parse(uriString)
             val parentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, treeUri)
                 ?: return false
 
-            // Проверяем, нет ли уже такого файла, и удаляем (перезапись)
-            val existing = parentDoc.findFile(sourceFile.name)
-            existing?.delete()
+            // Перезапись — удаляем существующий
+            parentDoc.findFile(sourceFile.name)?.delete()
 
-            // Создаём новый файл
-            val mime = mimeOf(sourceFile)
-            val newDoc = parentDoc.createFile(mime, sourceFile.name)
+            val newDoc = parentDoc.createFile(mimeOf(sourceFile), sourceFile.name)
                 ?: return false
 
-            context.contentResolver.openOutputStream(newDoc.uri)?.use { out ->
+            val outputStream = context.contentResolver.openOutputStream(newDoc.uri)
+            if (outputStream == null) {
+                Log.e(TAG, "openOutputStream вернул null для ${sourceFile.name}")
+                newDoc.delete()
+                return false
+            }
+
+            outputStream.use { out ->
                 sourceFile.inputStream().use { input ->
                     input.copyTo(out)
                 }
             }
 
-            Log.d(TAG, "Файл скопирован в SAF-папку: ${sourceFile.name}")
+            if (BuildConfig.DEBUG) Log.d(TAG, "Файл скопирован в SAF: ${sourceFile.name}")
             true
         } catch (e: Exception) {
             Log.e(TAG, "Ошибка копирования в SAF: ${e.message}", e)
@@ -634,33 +614,16 @@ object FileManager {
     }
 
     /**
-     * MIME-тип по расширению файла.
-     */
-    private fun mimeOf(file: File): String {
-        return when (file.extension.lowercase()) {
-            "pdf" -> "application/pdf"
-            "txt" -> "text/plain"
-            "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            "jpg", "jpeg" -> "image/jpeg"
-            "png" -> "image/png"
-            else -> "*/*"
-        }
-    }
-
-    /**
-     * Удаляет копию файла из SAF-папки (если папка выбрана).
+     * Удаляет копию файла из SAF-папки.
      */
     fun deleteFromSaveFolderIfSet(context: Context, fileName: String) {
-        val prefs = context.getSharedPreferences(SettingsActivity.PREFS_SETTINGS, Context.MODE_PRIVATE)
-        val uriString = prefs.getString(SettingsActivity.KEY_SAVE_FOLDER_URI, null) ?: return
+        val treeUri = getSaveFolderUri(context) ?: return
 
         try {
-            val treeUri = android.net.Uri.parse(uriString)
-            val parentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, treeUri)
-                ?: return
+            val parentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, treeUri) ?: return
             val doc = parentDoc.findFile(fileName) ?: return
             val deleted = doc.delete()
-            Log.d(TAG, "SAF-удаление $fileName: $deleted")
+            if (BuildConfig.DEBUG) Log.d(TAG, "SAF-удаление $fileName: $deleted")
         } catch (e: Exception) {
             Log.e(TAG, "Ошибка SAF-удаления: ${e.message}", e)
         }
@@ -670,27 +633,41 @@ object FileManager {
      * Переименовывает копию файла в SAF-папке.
      */
     fun renameInSaveFolderIfSet(context: Context, oldName: String, newName: String) {
-        val prefs = context.getSharedPreferences(SettingsActivity.PREFS_SETTINGS, Context.MODE_PRIVATE)
-        val uriString = prefs.getString(SettingsActivity.KEY_SAVE_FOLDER_URI, null) ?: return
+        val treeUri = getSaveFolderUri(context) ?: return
 
         try {
-            val treeUri = android.net.Uri.parse(uriString)
-            val parentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, treeUri)
-                ?: return
+            val parentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, treeUri) ?: return
             val doc = parentDoc.findFile(oldName) ?: return
             val renamed = doc.renameTo(newName)
-            Log.d(TAG, "SAF-переименование $oldName → $newName: $renamed")
+            if (BuildConfig.DEBUG) Log.d(TAG, "SAF-переименование $oldName → $newName: $renamed")
         } catch (e: Exception) {
             Log.e(TAG, "Ошибка SAF-переименования: ${e.message}", e)
         }
     }
 
-    /**
-     * Открывает первую страницу PDF, где встречается запрос.
-     * Пока не реализовано — возвращает 1.
-     * Можно расширить: хранить текст построчно с номерами страниц.
-     */
-    fun findFirstPageWithQuery(context: Context, pdfName: String, query: String): Int {
-        return 1
+    private fun getSaveFolderUri(context: Context): android.net.Uri? {
+        val prefs = context.getSharedPreferences(SettingsActivity.PREFS_SETTINGS, Context.MODE_PRIVATE)
+        val uriString = prefs.getString(SettingsActivity.KEY_SAVE_FOLDER_URI, null) ?: return null
+        return try {
+            android.net.Uri.parse(uriString)
+        } catch (_: Exception) {
+            null
+        }
     }
+
+    private fun mimeOf(file: File): String = when (file.extension.lowercase()) {
+        "pdf" -> "application/pdf"
+        "txt" -> "text/plain"
+        "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        "jpg", "jpeg" -> "image/jpeg"
+        "png" -> "image/png"
+        else -> "*/*"
+    }
+
+    // ==================== УТИЛИТЫ ====================
+
+    private fun baseName(fileName: String): String = fileName.substringBeforeLast(".")
+
+    private fun newTimestamp(): String =
+        SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
 }

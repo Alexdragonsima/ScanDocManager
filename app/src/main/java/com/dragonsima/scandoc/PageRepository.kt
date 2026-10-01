@@ -7,11 +7,15 @@ import com.google.mlkit.vision.text.Text
 import org.opencv.core.Mat
 import org.opencv.imgcodecs.Imgcodecs
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Репозиторий страниц текущей сессии сканирования.
- * Гибридное хранилище: до MAX_IN_MEMORY страниц держим в оперативке,
+ *
+ * Гибридное хранилище: до [MAX_IN_MEMORY] страниц держим в оперативке,
  * остальные сбрасываем на диск как JPEG в cacheDir.
+ *
+ * Все методы потокобезопасны.
  */
 object PageRepository {
 
@@ -19,106 +23,112 @@ object PageRepository {
     private const val MAX_IN_MEMORY = 5
 
     private val pages = mutableListOf<ScannedPage>()
+    private val lock = Any()
+    private val fileCounter = AtomicLong(0L)
 
-    fun getCount(): Int = pages.size
-    fun isEmpty(): Boolean = pages.isEmpty()
+    // ==================== ПУБЛИЧНОЕ API ====================
+
+    fun getCount(): Int = synchronized(lock) { pages.size }
 
     /**
-     * Добавляет страницу. Если в памяти больше MAX_IN_MEMORY — самую старую
-     * страницу сбрасываем на диск, освобождая Mat.
+     * Добавляет страницу. Если в памяти больше [MAX_IN_MEMORY] — самую старую
+     * выгружаем на диск, освобождая Mat.
      */
     fun addPage(context: Context, mat: Mat, visionText: Text?, thumbnail: Bitmap) {
-        if (pages.size >= MAX_IN_MEMORY) {
-            flushOldestToDisk(context)
-        }
-        val pageMat = mat.clone()
-        pages.add(
-            ScannedPage(
-                mat = pageMat,
-                visionText = visionText,
-                thumbnail = thumbnail,
-                filePath = null
+        synchronized(lock) {
+            if (pages.size >= MAX_IN_MEMORY) {
+                flushOldestToDiskLocked(context)
+            }
+
+            val pageMat = mat.clone()
+            pages.add(
+                ScannedPage(
+                    mat = pageMat,
+                    visionText = visionText,
+                    thumbnail = thumbnail,
+                    filePath = null
+                )
             )
-        )
-        Log.d(TAG, "Добавлена страница, всего: ${pages.size}")
+            if (BuildConfig.DEBUG) Log.d(TAG, "Добавлена страница, всего: ${pages.size}")
+        }
     }
 
     /**
      * Возвращает копию списка. Mat у страниц в памяти НЕ клонируется —
      * не освобождай его вручную.
      */
-    fun getAll(): List<ScannedPage> = pages.toList()
+    fun getAll(): List<ScannedPage> = synchronized(lock) { pages.toList() }
 
     /**
-     * Возвращает страницу по индексу. Если была выгружена на диск —
-     * подгружает Mat из файла.
+     * Удаляет страницу по индексу.
      */
-    fun getPage(index: Int): ScannedPage? {
-        val page = pages.getOrNull(index) ?: return null
-        if (page.mat != null || page.filePath == null) return page
-
-        val loaded = Imgcodecs.imread(page.filePath)
-        if (loaded.empty()) {
-            Log.e(TAG, "Не удалось загрузить ${page.filePath}")
-            return page
+    fun removeAt(index: Int) {
+        synchronized(lock) {
+            if (index !in pages.indices) return
+            val page = pages.removeAt(index)
+            releasePage(page)
+            if (BuildConfig.DEBUG) Log.d(TAG, "Удалена страница $index, осталось: ${pages.size}")
         }
-        val restored = page.copy(mat = loaded, filePath = null)
-        pages[index] = restored
-        return restored
-    }
-
-    /**
-     * Удаляет последнюю страницу (для «Переснять» в мультирежиме).
-     */
-    fun removeLast() {
-        val last = pages.removeLastOrNull() ?: return
-        last.mat?.release()
-        if (!last.thumbnail.isRecycled) last.thumbnail.recycle()
-        last.filePath?.let { File(it).delete() }
-        Log.d(TAG, "Удалена последняя страница, осталось: ${pages.size}")
     }
 
     /**
      * Полная очистка. Вызывать при завершении сессии.
      */
     fun clear() {
-        pages.forEach { page ->
-            page.mat?.release()
-            if (!page.thumbnail.isRecycled) page.thumbnail.recycle()
-            page.filePath?.let { File(it).delete() }
+        synchronized(lock) {
+            pages.forEach { releasePage(it) }
+            pages.clear()
+            if (BuildConfig.DEBUG) Log.d(TAG, "Репозиторий очищен")
         }
-        pages.clear()
-        Log.d(TAG, "Репозиторий очищен")
+    }
+
+    // ==================== ПРИВАТНОЕ ====================
+
+    /**
+     * Освобождает ресурсы одной страницы: Mat, thumbnail, файл.
+     * Не трогает коллекцию — вызывается под lock.
+     */
+    private fun releasePage(page: ScannedPage) {
+        page.mat?.release()
+        if (!page.thumbnail.isRecycled) page.thumbnail.recycle()
+        page.filePath?.let { runCatching { File(it).delete() } }
     }
 
     /**
-     * Удаляет страницу по индексу.
+     * Выгружает самую старую страницу с Mat в памяти на диск.
+     * Вызывается под lock.
      */
-    fun removeAt(index: Int) {
-        val page = pages.removeAt(index)
-        page.mat?.release()
-        if (!page.thumbnail.isRecycled) page.thumbnail.recycle()
-        page.filePath?.let { File(it).delete() }
-        Log.d(TAG, "Удалена страница $index, осталось: ${pages.size}")
-    }
-    // ---------- приватное ----------
-
-    private fun flushOldestToDisk(context: Context) {
+    private fun flushOldestToDiskLocked(context: Context) {
         val index = pages.indexOfFirst { it.mat != null }
         if (index < 0) return
 
         val page = pages[index]
         val mat = page.mat ?: return
 
-        val file = File(context.cacheDir, "page_${System.currentTimeMillis()}_$index.jpg")
-        val written = Imgcodecs.imwrite(file.absolutePath, mat)
+        val uniqueId = fileCounter.incrementAndGet()
+        val file = File(
+            context.cacheDir,
+            "page_${System.currentTimeMillis()}_${uniqueId}_$index.jpg"
+        )
+
+        val written = try {
+            Imgcodecs.imwrite(file.absolutePath, mat)
+        } catch (e: Exception) {
+            Log.e(TAG, "Исключение при записи страницы", e)
+            false
+        }
+
         if (!written) {
-            Log.e(TAG, "Ошибка записи страницы на диск")
+            // Не смогли записать — освобождаем Mat и помечаем как потерянную
+            Log.e(TAG, "Ошибка записи страницы $index на диск — освобождаем Mat")
+            mat.release()
+            pages[index] = page.copy(mat = null, filePath = null)
             return
         }
 
+        // Успешно записали — освобождаем Mat в памяти
         mat.release()
         pages[index] = page.copy(mat = null, filePath = file.absolutePath)
-        Log.d(TAG, "Страница $index выгружена на диск: ${file.name}")
+        if (BuildConfig.DEBUG) Log.d(TAG, "Страница $index выгружена: ${file.name}")
     }
 }

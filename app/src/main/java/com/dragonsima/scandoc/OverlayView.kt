@@ -1,11 +1,19 @@
 package com.dragonsima.scandoc
 
 import android.content.Context
-import android.graphics.*
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.CornerPathEffect
+import android.graphics.Paint
+import android.graphics.Path
 import android.util.AttributeSet
 import android.view.View
 import org.opencv.core.Point
 
+/**
+ * Рисует рамку документа поверх превью камеры.
+ * Все объекты Paint и Path создаются один раз и переиспользуются.
+ */
 class OverlayView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
@@ -13,76 +21,83 @@ class OverlayView @JvmOverloads constructor(
 
     private var corners: Array<Point>? = null
 
-    // Основная рамка
+    // Переиспользуемый Path для рамки документа
+    private val path = Path()
+
+    // ==================== Paint ====================
+
     private val borderPaint = Paint().apply {
-        color = Color.parseColor("#4F46E5")
+        color = COLOR_PRIMARY
         strokeWidth = 4f
         style = Paint.Style.STROKE
         isAntiAlias = true
-        pathEffect = CornerPathEffect(30f) // Скругленные углы
+        pathEffect = CornerPathEffect(30f)
     }
 
-    // Угловые точки
     private val cornerPaint = Paint().apply {
-        color = Color.parseColor("#FF5722")
+        color = COLOR_CORNER
         style = Paint.Style.FILL
         isAntiAlias = true
     }
 
-    // Заливка документа
     private val fillPaint = Paint().apply {
-        color = Color.parseColor("#204F46E5")
+        color = COLOR_FILL
         style = Paint.Style.FILL
         isAntiAlias = true
     }
+
+    private val ringPaint = Paint().apply {
+        color = Color.WHITE
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+        isAntiAlias = true
+    }
+
+    // ==================== Публичное API ====================
 
     fun setCorners(corners: Array<Point>?) {
         this.corners = corners
         invalidate()
     }
 
+    // ==================== Рисование ====================
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+
         val corners = corners ?: return
         if (corners.size != 4) return
 
-        // Путь для заливки
-        val path = Path().apply {
-            moveTo(corners[0].x.toFloat(), corners[0].y.toFloat())
-            lineTo(corners[1].x.toFloat(), corners[1].y.toFloat())
-            lineTo(corners[2].x.toFloat(), corners[2].y.toFloat())
-            lineTo(corners[3].x.toFloat(), corners[3].y.toFloat())
-            close()
-        }
+        // Пересобираем Path (один объект, переиспользуется)
+        path.reset()
+        path.moveTo(corners[0].x.toFloat(), corners[0].y.toFloat())
+        path.lineTo(corners[1].x.toFloat(), corners[1].y.toFloat())
+        path.lineTo(corners[2].x.toFloat(), corners[2].y.toFloat())
+        path.lineTo(corners[3].x.toFloat(), corners[3].y.toFloat())
+        path.close()
 
-        // Рисуем полупрозрачную заливку
+        // Полупрозрачная заливка
         canvas.drawPath(path, fillPaint)
 
-        // Рисуем рамку
+        // Рамка
         canvas.drawPath(path, borderPaint)
 
-        // Рисуем угловые маркеры
+        // Углы: точка + белое кольцо
         for (i in 0..3) {
-            canvas.drawCircle(
-                corners[i].x.toFloat(),
-                corners[i].y.toFloat(),
-                12f,
-                cornerPaint
-            )
+            val x = corners[i].x.toFloat()
+            val y = corners[i].y.toFloat()
 
-            // Добавляем белое кольцо вокруг маркера
-            val ringPaint = Paint().apply {
-                color = Color.WHITE
-                style = Paint.Style.STROKE
-                strokeWidth = 3f
-                isAntiAlias = true
-            }
-            canvas.drawCircle(
-                corners[i].x.toFloat(),
-                corners[i].y.toFloat(),
-                16f,
-                ringPaint
-            )
+            canvas.drawCircle(x, y, CORNER_RADIUS, cornerPaint)
+            canvas.drawCircle(x, y, RING_RADIUS, ringPaint)
         }
+    }
+
+    companion object {
+        private val COLOR_PRIMARY = Color.parseColor("#4F46E5")
+        private val COLOR_CORNER = Color.parseColor("#FF5722")
+        private val COLOR_FILL = Color.parseColor("#204F46E5")
+
+        private const val CORNER_RADIUS = 12f
+        private const val RING_RADIUS = 16f
     }
 }

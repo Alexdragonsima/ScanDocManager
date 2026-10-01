@@ -7,10 +7,10 @@ import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.view.View
-import android.widget.Button
 import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -21,7 +21,6 @@ import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
-import androidx.activity.OnBackPressedCallback
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.GoogleApiAvailability
 import com.google.android.gms.tasks.Tasks
@@ -30,6 +29,7 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
+import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
@@ -52,25 +52,25 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
 import kotlin.time.Duration.Companion.milliseconds
-import org.opencv.core.Mat
+
 class CameraActivity : AppCompatActivity() {
 
     // ==================== UI ====================
     private lateinit var previewView: PreviewView
     private lateinit var overlay: OverlayView
     private lateinit var captureButton: View
-    private lateinit var retakeButton: Button
-    private lateinit var cropButton: Button
-    private lateinit var retakeLabel: android.widget.TextView
-    private lateinit var saveLabel: android.widget.TextView
-    private lateinit var saveResultButton: Button
+    private lateinit var retakeButton: View
+    private lateinit var cropButton: View
+    private lateinit var saveResultButton: View
     private lateinit var actionsLayout: View
     private lateinit var resultImageView: ImageView
-    private lateinit var backButton: android.widget.ImageButton
+    private lateinit var backButton: View
     private lateinit var progressBar: ProgressBar
     private lateinit var progressText: android.widget.TextView
     private lateinit var hdrButton: MaterialButton
     private lateinit var aiButton: MaterialButton
+
+    // Мультирежим
     private var isShowingPages = true
     private lateinit var pagesHeaderRow: View
     private lateinit var pagesInlineRecycler: androidx.recyclerview.widget.RecyclerView
@@ -88,7 +88,6 @@ class CameraActivity : AppCompatActivity() {
     private val filterCache = mutableMapOf<String, Mat>()
 
     private var multiPageMode = false
-    private lateinit var pageCounterText: android.widget.TextView
 
     private lateinit var cameraProvider: ProcessCameraProvider
     private var baseMat: Mat? = null
@@ -107,12 +106,10 @@ class CameraActivity : AppCompatActivity() {
     private val lastDetectedCorners = AtomicReference<Array<Point>?>(null)
     private val lastImageWidth = AtomicLong(0)
     private val lastImageHeight = AtomicLong(0)
-    private val lastRecognizedText = AtomicReference<com.google.mlkit.vision.text.Text?>(null)
+    private val lastRecognizedText = AtomicReference<Text?>(null)
 
     private val originalImagePath = AtomicReference<String?>(null)
     private val capturedPhotoPath = AtomicReference<String?>(null)
-    private val processedImagePath = AtomicReference<String?>(null)
-    private val currentResultBitmap = AtomicReference<Bitmap?>(null)
 
     private val lastFrameProcessedTime = AtomicLong(0L)
     private val minFrameIntervalMs = 300L
@@ -150,8 +147,7 @@ class CameraActivity : AppCompatActivity() {
             val scanResult = GmsDocumentScanningResult.fromActivityResultIntent(result.data)
             val pages = scanResult?.pages
             if (!pages.isNullOrEmpty()) {
-                val uri = pages[0].imageUri
-                handleMlKitResult(uri)
+                handleMlKitResult(pages[0].imageUri)
             }
         }
     }
@@ -159,16 +155,22 @@ class CameraActivity : AppCompatActivity() {
     // ==================== Жизненный цикл ====================
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.setFlags(
+            android.view.WindowManager.LayoutParams.FLAG_SECURE,
+            android.view.WindowManager.LayoutParams.FLAG_SECURE
+        )
         setContentView(R.layout.activity_camera)
+
         multiPageMode = intent.getBooleanExtra("multiPageMode", false)
-        setupFilterButtons()
+
         initViews()
+        setupFilterButtons()
         setupButtons()
+
+        if (multiPageMode) setupMultiPageUI()
         applyDefaultFormat()
-        if(multiPageMode){
-            setupMultiPageUI()
-        }
         setupBackHandler()
+
         if (hasCameraPermission()) startCamera()
         else requestPermissionLauncher.launch(android.Manifest.permission.CAMERA)
     }
@@ -178,12 +180,17 @@ class CameraActivity : AppCompatActivity() {
         shutdownExecutors()
         releaseResources()
         FileManager.cleanCache(this)
-        if (::cameraProvider.isInitialized) {
-            cameraProvider.unbindAll()
-        }
+
+        if (::cameraProvider.isInitialized) cameraProvider.unbindAll()
+
         baseMat?.release()
+        baseMat = null
         filterCache.values.forEach { it.release() }
         filterCache.clear()
+
+        textRecognizer?.close()
+        textRecognizer = null
+
         if (!multiPageMode) PageRepository.clear()
     }
 
@@ -193,10 +200,7 @@ class CameraActivity : AppCompatActivity() {
         overlay = findViewById(R.id.overlayView)
         resultImageView = findViewById(R.id.resultImageView)
         captureButton = findViewById(R.id.captureButton)
-        pageCounterText = findViewById(R.id.pageCounterText)
         retakeButton = findViewById(R.id.retakeButton)
-        retakeLabel = findViewById(R.id.retakeLabel)
-        saveLabel = findViewById(R.id.saveLabel)
         cropButton = findViewById(R.id.cropButton)
         saveResultButton = findViewById(R.id.saveResultButton)
         actionsLayout = findViewById(R.id.actionsLayout)
@@ -206,154 +210,107 @@ class CameraActivity : AppCompatActivity() {
         hdrButton = findViewById(R.id.hdrButton)
         aiButton = findViewById(R.id.aiButton)
 
-        previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
-        findViewById<View>(R.id.filterPanel).visibility = View.GONE
-        findViewById<View>(R.id.actionsLayout).visibility = View.GONE
-        retakeButton.visibility = View.GONE
-        cropButton.visibility = View.GONE
-        saveResultButton.visibility = View.GONE
-        progressBar.visibility = View.GONE
-
         pagesHeaderRow = findViewById(R.id.pagesHeaderRow)
         pagesInlineRecycler = findViewById(R.id.pagesInlineRecycler)
         pagesHeaderTitle = findViewById(R.id.pagesHeaderTitle)
         togglePagesButton = findViewById(R.id.togglePagesButton)
         actionButtonsRow = findViewById(R.id.actionButtonsRow)
+
+        previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
+
+        // Скрываем всё, что не нужно до первого снимка
+        findViewById<View>(R.id.filterPanel).visibility = View.GONE
+        findViewById<View>(R.id.bottomSheet).visibility = View.GONE
+        actionsLayout.visibility = View.GONE
+        retakeButton.visibility = View.GONE
+        cropButton.visibility = View.GONE
+        saveResultButton.visibility = View.GONE
+        progressBar.visibility = View.GONE
     }
 
     private fun setupButtons() {
-        backButton.setOnClickListener {
-            onBackPressedDispatcher.onBackPressed()
-        }
+        backButton.setOnClickListener { onBackPressedDispatcher.onBackPressed() }
+
         saveResultButton.setOnClickListener {
             if (multiPageMode) {
                 finishMultiPageSession()
             } else {
-                val prefs = getSharedPreferences(SettingsActivity.PREFS_SETTINGS, MODE_PRIVATE)
-                val format = prefs.getString(SettingsActivity.KEY_DEFAULT_FORMAT, "pdf") ?: "pdf"
+                val format = getDefaultFormat()
                 if (format == "jpg") saveDocumentAsJpg() else saveDocument()
             }
         }
+
         retakeButton.setOnClickListener {
             if (multiPageMode) addCurrentPageToRepository() else retakePicture()
         }
+
         cropButton.setOnClickListener { cropDocument() }
 
-        findViewById<View>(R.id.ocrButton).setOnClickListener {
-            val mat = baseMat ?: run {
-                Toast.makeText(this, getString(R.string.camera_no_image), Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            progressBar.visibility = View.VISIBLE
+        findViewById<View>(R.id.ocrButton).setOnClickListener { performOcr() }
 
-            processingExecutor.execute {
-                val bitmap = matToBitmap(mat)
-                val image = InputImage.fromBitmap(bitmap, 0)
-                getTextRecognizer().process(image)
-                    .addOnSuccessListener { visionText ->
-                        lastRecognizedText.set(visionText)
-                        runOnUiThread {
-                            progressBar.visibility = View.GONE
-                            if (visionText.text.isNotBlank()) {
-                                startActivity(OcrResultActivity.createIntent(this, visionText.text))
-                            } else {
-                                Toast.makeText(this, getString(R.string.camera_ocr_failed), Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    }
-                    .addOnFailureListener { e ->
-                        Log.e(TAG, "OCR failed", e)
-                        runOnUiThread {
-                            progressBar.visibility = View.GONE
-                            Toast.makeText(this, getString(R.string.camera_ocr_error, e.message ?: ""), Toast.LENGTH_SHORT).show()
-                        }
-                    }
-            }
+        findViewById<View>(R.id.rotateButton).setOnClickListener { showRotateDialog() }
+
+        findViewById<View>(R.id.jpgButton).setOnClickListener {
+            if (multiPageMode) finishMultiPageAsJpg() else saveDocumentAsJpg()
         }
 
+        findViewById<View>(R.id.menuButton).setOnClickListener { showActionsMenu() }
+
+        // HDR и AI оставлены как невидимые кнопки (управление через меню «⋯»)
         hdrButton.setOnClickListener {
             hdrEnabled = !hdrEnabled
             updateHdrButtonState()
         }
-
         aiButton.setOnClickListener {
-            if (isMlKitAvailable()) {
-                startMlKitScanner()
-            } else {
-                Toast.makeText(this, getString(R.string.mlkit_unavailable_fallback), Toast.LENGTH_SHORT).show()
-            }
+            if (isMlKitAvailable()) startMlKitScanner()
+            else Toast.makeText(this, getString(R.string.mlkit_unavailable_fallback), Toast.LENGTH_SHORT).show()
         }
 
         captureButton.setOnClickListener {
-            if (hdrEnabled) captureHDRAndProcess()
-            else takePicture()
-        }
-
-        // Новая кнопка «⋯» — меню действий
-        findViewById<View>(R.id.menuButton).setOnClickListener {
-            showActionsMenu()
-        }
-
-        // Новая кнопка «Повернуть»
-        findViewById<View>(R.id.rotateButton).setOnClickListener {
-            showRotateDialog()
-        }
-
-        // Новая кнопка «JPG»
-        findViewById<View>(R.id.jpgButton).setOnClickListener {
-            if (multiPageMode) {
-                finishMultiPageAsJpg()
-            } else {
-                // Маленькая кнопка — всегда быстрый экспорт в JPG
-                saveDocumentAsJpg()
-            }
+            if (hdrEnabled) captureHDRAndProcess() else takePicture()
         }
 
         hdrEnabled = false
         updateHdrButtonState()
     }
 
-    /**
-     * Читает настройку формата по умолчанию и обновляет текст большой кнопки.
-     */
+    private fun updateHdrButtonState() {
+        hdrButton.text = getString(if (hdrEnabled) R.string.hdr_on else R.string.hdr_off)
+        val colorRes = if (hdrEnabled) R.color.primary_color else R.color.grey_500
+        hdrButton.backgroundTintList = ContextCompat.getColorStateList(this, colorRes)
+    }
 
-    override fun onResume() {
-        super.onResume()
-        // Обновляем текст большой кнопки, если формат поменялся в настройках
-        if (!multiPageMode && baseMat != null) {
-            applyDefaultFormat()
-        }
+    // ==================== Формат по умолчанию ====================
+    private fun getDefaultFormat(): String {
+        val prefs = getSharedPreferences(SettingsActivity.PREFS_SETTINGS, MODE_PRIVATE)
+        return prefs.getString(SettingsActivity.KEY_DEFAULT_FORMAT, "pdf") ?: "pdf"
     }
 
     private fun applyDefaultFormat() {
-        val prefs = getSharedPreferences(SettingsActivity.PREFS_SETTINGS, MODE_PRIVATE)
-        val format = prefs.getString(SettingsActivity.KEY_DEFAULT_FORMAT, "pdf") ?: "pdf"
-
         if (multiPageMode) {
-            // В мультирежиме всегда PDF (JPG тоже можно, но реже)
-            saveResultButton.text = "✅  Завершить и сохранить"
+            saveResultButton.let {
+                (it as? MaterialButton)?.text = getString(R.string.save_finish_multi)
+            }
             return
         }
 
-        if (format == "jpg") {
-            saveResultButton.text = "Сохранить JPG"
+        val text = if (getDefaultFormat() == "jpg") {
+            getString(R.string.save_jpg)
         } else {
-            saveResultButton.text = "Сохранить PDF"
+            getString(R.string.save_pdf)
         }
+        (saveResultButton as? MaterialButton)?.text = text
     }
 
+    // ==================== Back handler ====================
     private fun setupBackHandler() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-
-                // 1. Обычный режим — просто закрываем
                 if (!multiPageMode) {
                     finish()
                     return
                 }
 
-                // 2. Мультирежим + есть активный снимок (мы на превью) —
-                //    спрашиваем "Отменить снимок?"
                 val hasActiveShot = baseMat != null
                 if (hasActiveShot) {
                     androidx.appcompat.app.AlertDialog.Builder(this@CameraActivity)
@@ -367,7 +324,6 @@ class CameraActivity : AppCompatActivity() {
                     return
                 }
 
-                // 3. Мультирежим + накоплены страницы — стандартный диалог
                 if (PageRepository.getCount() > 0 && !pendingBackAction) {
                     pendingBackAction = true
                     androidx.appcompat.app.AlertDialog.Builder(this@CameraActivity)
@@ -385,12 +341,9 @@ class CameraActivity : AppCompatActivity() {
                         .setNegativeButton(getString(R.string.common_cancel)) { _, _ ->
                             pendingBackAction = false
                         }
-                        .setOnCancelListener {
-                            pendingBackAction = false
-                        }
+                        .setOnCancelListener { pendingBackAction = false }
                         .show()
                 } else {
-                    // 4. Мультирежим, ничего не накоплено — просто выходим
                     PageRepository.clear()
                     finish()
                 }
@@ -398,6 +351,7 @@ class CameraActivity : AppCompatActivity() {
         })
     }
 
+    // ==================== Меню действий (⋯) ====================
     private fun showFormatDialog() {
         val options = arrayOf(
             getString(R.string.save_format_pdf),
@@ -407,8 +361,8 @@ class CameraActivity : AppCompatActivity() {
             .setTitle(getString(R.string.save_format_title))
             .setItems(options) { _, which ->
                 when (which) {
-                    0 -> { if (multiPageMode) finishMultiPageSession() else saveDocument() }
-                    1 -> { if (multiPageMode) finishMultiPageAsJpg() else saveDocumentAsJpg() }
+                    0 -> if (multiPageMode) finishMultiPageSession() else saveDocument()
+                    1 -> if (multiPageMode) finishMultiPageAsJpg() else saveDocumentAsJpg()
                 }
             }
             .setNegativeButton(getString(R.string.common_cancel), null)
@@ -417,40 +371,35 @@ class CameraActivity : AppCompatActivity() {
 
     private fun showActionsMenu() {
         val hasShot = baseMat != null
-
         val actions = mutableListOf<String>()
         val handlers = mutableListOf<() -> Unit>()
 
-        // HDR — всегда доступен
-        actions.add(if (hdrEnabled) "HDR: ВКЛ ✓" else "HDR: ВЫКЛ")
+        actions.add(getString(if (hdrEnabled) R.string.menu_hdr_on else R.string.menu_hdr_off))
         handlers.add {
             hdrEnabled = !hdrEnabled
             updateHdrButtonState()
             Toast.makeText(
                 this,
-                if (hdrEnabled) "HDR включён" else "HDR выключен",
+                getString(if (hdrEnabled) R.string.hdr_enabled_toast else R.string.hdr_disabled_toast),
                 Toast.LENGTH_SHORT
             ).show()
         }
 
-        // AI-скан — всегда доступен
-        actions.add("AI-скан (ML Kit)")
+        actions.add(getString(R.string.menu_ai_scan))
         handlers.add {
             if (isMlKitAvailable()) startMlKitScanner()
             else Toast.makeText(this, getString(R.string.mlkit_unavailable_fallback), Toast.LENGTH_SHORT).show()
         }
 
-        // Формат — всегда доступен
-        actions.add("Формат сохранения (PDF / JPG)")
+        actions.add(getString(R.string.menu_format))
         handlers.add { showFormatDialog() }
 
-        // Действия для снимка — только если снимок есть
         if (hasShot) {
-            actions.add("Повернуть")
+            actions.add(getString(R.string.menu_rotate))
             handlers.add { showRotateDialog() }
 
             if (multiPageMode) {
-                actions.add("Переснять без сохранения")
+                actions.add(getString(R.string.menu_retake))
                 handlers.add {
                     androidx.appcompat.app.AlertDialog.Builder(this)
                         .setTitle(getString(R.string.multi_page_dialog_retake_title))
@@ -465,394 +414,67 @@ class CameraActivity : AppCompatActivity() {
         }
 
         androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("Действия")
+            .setTitle(getString(R.string.menu_actions_title))
             .setItems(actions.toTypedArray()) { _, which ->
                 handlers.getOrNull(which)?.invoke()
             }
             .setNegativeButton(getString(R.string.common_cancel), null)
             .show()
     }
-    private fun saveDocumentAsJpg() {
+
+    // ==================== OCR ====================
+    private fun performOcr() {
         val mat = baseMat ?: run {
             Toast.makeText(this, getString(R.string.camera_no_image), Toast.LENGTH_SHORT).show()
             return
         }
-        val finalMat = filterCache[currentFilter] ?: mat
-        if (finalMat.empty()) {
-            Toast.makeText(this, getString(R.string.camera_empty_image), Toast.LENGTH_SHORT).show()
-            return
-        }
-
         progressBar.visibility = View.VISIBLE
-        saveResultButton.isEnabled = false
 
-        saveExecutor.execute {
-            val matToSave = finalMat.clone()
+        processingExecutor.execute {
+            val bitmap = matToBitmap(mat)
             try {
-                val jpgFile = FileManager.saveToJpg(this, matToSave)
-                FileManager.copyToSaveFolderIfSet(this, jpgFile)
-                val resultIntent = Intent().apply {
-                    putExtra("savedPdfPath", jpgFile.absolutePath)
-                    putExtra("savedPdfName", jpgFile.name)
-                }
-                runOnUiThread {
-                    progressBar.visibility = View.GONE
-                    saveResultButton.isEnabled = true
-                    setResult(RESULT_OK, resultIntent)
-                    androidx.appcompat.app.AlertDialog.Builder(this)
-                        .setTitle(getString(R.string.save_jpg_saved))
-                        .setMessage(jpgFile.name)
-                        .setPositiveButton(getString(R.string.common_open)) { _, _ ->
-                            DocumentActions.openImage(this, jpgFile)
-                            finish()
+                val image = InputImage.fromBitmap(bitmap, 0)
+                getTextRecognizer().process(image)
+                    .addOnSuccessListener { visionText ->
+                        lastRecognizedText.set(visionText)
+                        runOnUiThread {
+                            progressBar.visibility = View.GONE
+                            if (visionText.text.isNotBlank()) {
+                                startActivity(OcrResultActivity.createIntent(this, visionText.text))
+                            } else {
+                                Toast.makeText(this, getString(R.string.camera_ocr_failed), Toast.LENGTH_SHORT).show()
+                            }
                         }
-                        .setNeutralButton(getString(R.string.common_share)) { _, _ ->
-                            DocumentActions.shareImage(this, jpgFile)
-                            finish()
+                    }
+                    .addOnFailureListener { e ->
+                        Log.e(TAG, "OCR failed", e)
+                        runOnUiThread {
+                            progressBar.visibility = View.GONE
+                            Toast.makeText(
+                                this,
+                                getString(R.string.camera_ocr_error, e.message ?: ""),
+                                Toast.LENGTH_SHORT
+                            ).show()
                         }
-                        .setNegativeButton(getString(R.string.common_done)) { _, _ -> finish() }
-                        .setCancelable(false)
-                        .show()
-                }
+                    }
             } catch (e: Exception) {
-                Log.e(TAG, "saveDocumentAsJpg error", e)
-                runOnUiThread {
-                    progressBar.visibility = View.GONE
-                    saveResultButton.isEnabled = true
-                    Toast.makeText(this, "Ошибка: ${e.message}", Toast.LENGTH_LONG).show()
-                }
-            } finally {
-                matToSave.release()
+                Log.e(TAG, "performOcr error", e)
+                bitmap.recycle()
+                runOnUiThread { progressBar.visibility = View.GONE }
             }
         }
     }
-    private fun finishMultiPageAsJpg() {
-        // Добавляем текущую страницу, если она есть
-        val mat = baseMat
-        if (mat != null) {
-            val filtered = filterCache[currentFilter] ?: mat
-            if (!filtered.empty()) {
-                val thumbBitmap = matToBitmap(filtered)
-                val scaledThumb = Bitmap.createScaledBitmap(thumbBitmap, 200, 260, true)
-                thumbBitmap.recycle()
-                try {
-                    PageRepository.addPage(
-                        context = this,
-                        mat = filtered,
-                        visionText = lastRecognizedText.get(),
-                        thumbnail = scaledThumb
-                    )
-                } catch (e: Exception) {
-                    Log.e(TAG, "finishMultiPageAsJpg: addPage error", e)
-                    if (!scaledThumb.isRecycled) scaledThumb.recycle()
-                }
-            }
-        }
 
-        val pages = PageRepository.getAll()
-        if (pages.isEmpty()) {
-            Toast.makeText(this, getString(R.string.multi_page_no_pages), Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        progressBar.visibility = View.VISIBLE
-        saveResultButton.isEnabled = false
-
-        saveExecutor.execute {
-            try {
-                val folder = FileManager.saveBatchToJpg(this, pages)
-                val files = folder.listFiles()?.sortedBy { it.name } ?: emptyList()
-                // Копируем каждый JPG в SAF-папку
-                files.forEach { FileManager.copyToSaveFolderIfSet(this, it) }
-
-                val resultIntent = Intent().apply {
-                    putExtra("savedPdfPath", folder.absolutePath)
-                    putExtra("savedPdfName", folder.name)
-                }
-                PageRepository.clear()
-
-                runOnUiThread {
-                    progressBar.visibility = View.GONE
-                    saveResultButton.isEnabled = true
-                    setResult(RESULT_OK, resultIntent)
-                    androidx.appcompat.app.AlertDialog.Builder(this)
-                        .setTitle(getString(R.string.save_multi_jpg_saved, files.size))
-                        .setMessage(folder.name)
-                        .setPositiveButton(getString(R.string.save_open_first)) { _, _ ->
-                            files.firstOrNull()?.let { DocumentActions.openImage(this, it) }
-                            finish()
-                        }
-                        .setNeutralButton(getString(R.string.save_share_all)) { _, _ ->
-                            DocumentActions.shareImages(this, files)
-                            finish()
-                        }
-                        .setNegativeButton(getString(R.string.common_done)) { _, _ -> finish() }
-                        .setCancelable(false)
-                        .show()
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "finishMultiPageAsJpg error", e)
-                runOnUiThread {
-                    progressBar.visibility = View.GONE
-                    saveResultButton.isEnabled = true
-                    Toast.makeText(this, getString(R.string.camera_save_failed, e.message ?: ""), Toast.LENGTH_LONG).show()
-                }
-            }
-        }
-    }
-    private fun setupMultiPageUI() {
-        saveResultButton.text = "Завершить и сохранить"
-        retakeButton.text = "Добавить страницу"
-
-        // Инициализация миниатюр
-        pagesAdapter = PageThumbnailAdapter(
-            onPageClick = { position -> showFullPageViewer(position) },
-            onPageLongClick = { position ->
-                androidx.appcompat.app.AlertDialog.Builder(this)
-                    .setTitle("Удалить страницу ${position + 1}?")
-                    .setPositiveButton("Удалить") { _, _ ->
-                        PageRepository.removeAt(position)
-                        refreshPagesList()
-                        updatePageCounter()
-                    }
-                    .setNegativeButton("Отмена", null)
-                    .show()
-            }
-        )
-        pagesInlineRecycler.layoutManager = androidx.recyclerview.widget.LinearLayoutManager(
-            this, androidx.recyclerview.widget.LinearLayoutManager.HORIZONTAL, false
-        )
-        pagesInlineRecycler.adapter = pagesAdapter
-
-        // Переключатель страницы ↔ фильтры
-        togglePagesButton.setOnClickListener { togglePagesView() }
-
-        // По умолчанию — показываем страницы
-        isShowingPages = true
-        applyPagesViewState()
-
-        Toast.makeText(
-            this,
-            "Короткий тап «Добавить» — новая страница.\nКнопка с ползунками — фильтры.",
-            Toast.LENGTH_LONG
-        ).show()
-    }
-
-    /**
-     * Переключает вид шторки между миниатюрами и фильтрами.
-     */
-    private fun togglePagesView() {
-        isShowingPages = !isShowingPages
-        applyPagesViewState()
-    }
-
-    private fun applyPagesViewState() {
-        if (!multiPageMode) return
-
-        val pagesVis = if (isShowingPages) View.VISIBLE else View.GONE
-        val filtersVis = if (isShowingPages) View.GONE else View.VISIBLE
-
-        pagesHeaderRow.visibility = View.VISIBLE
-        pagesInlineRecycler.visibility = pagesVis
-        findViewById<View>(R.id.filterPanel).visibility = filtersVis
-        actionButtonsRow.visibility = filtersVis
-
-        // Заголовок и иконка меняются
-        if (isShowingPages) {
-            pagesHeaderTitle.text = "Страницы (${PageRepository.getCount()})"
-        } else {
-            pagesHeaderTitle.text = "Фильтры"
-        }
-
-        if (isShowingPages) refreshPagesList()
-    }
-
-    /**
-     * Обновляет список миниатюр страниц.
-     */
-    private fun refreshPagesList() {
-        if (!multiPageMode) return
-        val pages = PageRepository.getAll()
-        pagesAdapter?.submitPages(pages)
-        pagesHeaderTitle.text = "Страницы (${pages.size})"
-    }
-
-    private fun showPageListSheet() {
-        val pages = PageRepository.getAll()
-        val hasCurrent = baseMat != null
-
-        if (pages.isEmpty() && !hasCurrent) {
-            Toast.makeText(this, getString(R.string.page_list_empty), Toast.LENGTH_SHORT).show()
-            return
-        }
-
-
-        val sheetView = layoutInflater.inflate(R.layout.activity_page_list, null)
-
-        val sheetDialog = com.google.android.material.bottomsheet.BottomSheetDialog(this)
-        sheetDialog.setContentView(sheetView)
-
-        val recyclerView = sheetView.findViewById<androidx.recyclerview.widget.RecyclerView>(R.id.pagesRecyclerView)
-        val title = sheetView.findViewById<android.widget.TextView>(R.id.pagesTitle)
-
-        title.text = if (hasCurrent) {
-            getString(R.string.page_list_title_with_current, pages.size)
-        } else {
-            getString(R.string.page_list_title, pages.size)
-        }
-
-        val adapter = PageThumbnailAdapter(
-            onPageClick = { position ->
-                sheetDialog.dismiss()
-                showFullPageViewer(position)
-            },
-            onPageLongClick = { position ->
-                androidx.appcompat.app.AlertDialog.Builder(this)
-                    .setTitle(getString(R.string.page_list_delete_title, position + 1))
-                    .setPositiveButton(getString(R.string.common_delete)) { _, _ ->
-                        PageRepository.removeAt(position)
-                        sheetDialog.dismiss()
-                        updatePageCounter()
-                        if (PageRepository.getCount() > 0) showPageListSheet()
-                    }
-                    .setNegativeButton(getString(R.string.common_cancel), null)
-                    .show()
-            }
-        )
-
-        recyclerView.layoutManager =
-            androidx.recyclerview.widget.LinearLayoutManager(this, androidx.recyclerview.widget.LinearLayoutManager.HORIZONTAL, false)
-        recyclerView.adapter = adapter
-        adapter.submitPages(pages)
-
-        sheetView.findViewById<View>(R.id.closeButton).setOnClickListener {
-            sheetDialog.dismiss()
-        }
-        sheetView.findViewById<View>(R.id.cancelButton).setOnClickListener {
-            sheetDialog.dismiss()
-        }
-        sheetView.findViewById<View>(R.id.finishButton).setOnClickListener {
-            sheetDialog.dismiss()
-            finishMultiPageSession()
-        }
-
-        sheetDialog.show()
-    }
-
-    /**
-     * Открывает полноэкранный просмотр страницы.
-     */
-    private fun showFullPageViewer(startPosition: Int) {
-        val pages = PageRepository.getAll()
-        if (pages.isEmpty() || startPosition !in pages.indices) return
-
-        val view = layoutInflater.inflate(R.layout.dialog_page_viewer, null)
-        val dialog = android.app.Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
-        dialog.setContentView(view)
-
-        val imageView = view.findViewById<android.widget.ImageView>(R.id.fullImageView)
-        val indicator = view.findViewById<android.widget.TextView>(R.id.pageIndicator)
-        val prevBtn = view.findViewById<android.view.View>(R.id.prevButton)
-        val nextBtn = view.findViewById<android.view.View>(R.id.nextButton)
-        val deleteBtn = view.findViewById<android.view.View>(R.id.deletePageButton)
-
-        var currentIndex = startPosition
-
-        fun render() {
-            val list = PageRepository.getAll()
-            if (currentIndex !in list.indices) {
-                dialog.dismiss()
-                return
-            }
-            val page = list[currentIndex]
-            imageView.setImageBitmap(page.thumbnail)
-            indicator.text = getString(R.string.page_viewer_indicator, currentIndex + 1, list.size)
-
-            prevBtn.isEnabled = currentIndex > 0
-            nextBtn.isEnabled = currentIndex < list.size - 1
-            prevBtn.alpha = if (prevBtn.isEnabled) 1f else 0.4f
-            nextBtn.alpha = if (nextBtn.isEnabled) 1f else 0.4f
-        }
-
-        prevBtn.setOnClickListener {
-            if (currentIndex > 0) {
-                currentIndex--
-                render()
-            }
-        }
-        nextBtn.setOnClickListener {
-            if (currentIndex < PageRepository.getCount() - 1) {
-                currentIndex++
-                render()
-            }
-        }
-        deleteBtn.setOnClickListener {
-            androidx.appcompat.app.AlertDialog.Builder(this)
-                .setTitle(getString(R.string.page_list_delete_title, currentIndex + 1))
-                .setPositiveButton(getString(R.string.common_delete)) { _, _ ->
-                    PageRepository.removeAt(currentIndex)
-                    val remaining = PageRepository.getCount()
-                    if (remaining == 0) {
-                        dialog.dismiss()
-                    } else {
-                        if (currentIndex >= remaining) currentIndex = remaining - 1
-                        render()
-                    }
-                    updatePageCounter()
-                }
-                .setNegativeButton(getString(R.string.common_cancel), null)
-                .show()
-        }
-
-        // Тап по фону — закрыть
-        view.setOnClickListener { dialog.dismiss() }
-
-        dialog.show()
-        render()
-    }
-
-    private fun updatePageCounter() {
-        // Счётчик убран — информация о страницах показывается в шторке
-        pageCounterText.visibility = View.GONE
-    }
-
-    private fun updateHdrButtonState() {
-        if (hdrEnabled) {
-            hdrButton.text = getString(R.string.hdr_on)
-            hdrButton.setBackgroundColor(android.graphics.Color.parseColor("#4F46E5"))
-        } else {
-            hdrButton.text = getString(R.string.hdr_off)
-            hdrButton.setBackgroundColor(android.graphics.Color.parseColor("#9E9E9E"))
-        }
-    }
-
-    // ==================== Утилиты ====================
-    private fun isMlKitAvailable(): Boolean {
-        return GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(this) == ConnectionResult.SUCCESS
-    }
-
-    private fun getTextRecognizer(): TextRecognizer{
-        if (textRecognizer == null){
+    private fun getTextRecognizer(): TextRecognizer {
+        if (textRecognizer == null) {
             textRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
         }
         return textRecognizer!!
     }
 
-    private fun recognizeTextFromMat(mat: Mat, onResult: (String) -> Unit) {
-        // Конвертируем Mat в Bitmap (у нас уже есть matToBitmap)
-        val bitmap = matToBitmap(mat)
-        val image = InputImage.fromBitmap(bitmap, 0) // rotationDegrees = 0, т.к. Mat уже выпрямлен
-
-        getTextRecognizer().process(image)
-            .addOnSuccessListener { visionText ->
-                // visionText.text содержит весь распознанный текст
-                val fullText = visionText.text
-                onResult(fullText)
-            }
-            .addOnFailureListener { e ->
-                Log.e(TAG, "OCR failed", e)
-                onResult("")
-            }
+    private fun isMlKitAvailable(): Boolean {
+        return GoogleApiAvailability.getInstance()
+            .isGooglePlayServicesAvailable(this) == ConnectionResult.SUCCESS
     }
 
     private fun hasCameraPermission(): Boolean {
@@ -927,7 +549,6 @@ class CameraActivity : AppCompatActivity() {
                     imageAnalysis,
                     imageCapture
                 )
-                Log.d(TAG, "Camera started")
             } catch (e: Exception) {
                 Log.e(TAG, "Camera start error", e)
                 runOnUiThread {
@@ -942,24 +563,29 @@ class CameraActivity : AppCompatActivity() {
         val bitmap = imageProxy.toBitmap()
 
         val rotation = imageProxy.imageInfo.rotationDegrees
-        val rotatedBitmap = if (rotation != 0) {
+        val rotatedBitmap: Bitmap = if (rotation != 0) {
             val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
             Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-                .also { bitmap.recycle() }
         } else bitmap
 
         val fullMat = Mat()
+        var bgrMat: Mat? = null
+
         try {
             Utils.bitmapToMat(rotatedBitmap, fullMat)
-            if (fullMat.channels() == 4) {
-                Imgproc.cvtColor(fullMat, fullMat, Imgproc.COLOR_RGBA2BGR)
+
+            // Конвертация RGBA → BGR через новый Mat (in-place опасно при смене каналов)
+            val workingMat: Mat = if (fullMat.channels() == 4) {
+                Mat().also { bgrMat = it; Imgproc.cvtColor(fullMat, it, Imgproc.COLOR_RGBA2BGR) }
+            } else fullMat
+
+            if (workingMat.empty()) return
+
+            val corners = DocumentDetector.findDocumentCorners(workingMat)
+
+            if (BuildConfig.DEBUG) {
+                Log.d(TAG, "Corners: ${corners?.joinToString { "(${it.x.toInt()},${it.y.toInt()})" }}")
             }
-            if (fullMat.empty()) return
-
-            // Классическая детекция OpenCV
-            val corners = DocumentDetector.findDocumentCorners(fullMat)
-
-            Log.d(TAG, "Corners detected: ${corners?.joinToString { "(${it.x.toInt()}, ${it.y.toInt()})" }}")
 
             if (corners != null && corners.size == 4 && previewView.width > 0 && previewView.height > 0) {
                 val cornersCopy = corners.map { Point(it.x, it.y) }.toTypedArray()
@@ -982,7 +608,9 @@ class CameraActivity : AppCompatActivity() {
             Log.e(TAG, "processFrame error", e)
         } finally {
             fullMat.release()
-            rotatedBitmap.recycle()
+            bgrMat?.release()
+            if (rotatedBitmap !== bitmap) rotatedBitmap.recycle()
+            bitmap.recycle()
             imageProxy.close()
         }
     }
@@ -1009,16 +637,12 @@ class CameraActivity : AppCompatActivity() {
                     originalImagePath.set(photoFile.absolutePath)
                     processingExecutor.execute {
                         try {
-                            val detected = lastDetectedCorners.get()
-                            val imgWidth = lastImageWidth.get().toInt()
-                            val imgHeight = lastImageHeight.get().toInt()
                             processCapturedImage(
                                 photoFile.absolutePath,
-                                detected,
-                                imgWidth,
-                                imgHeight
+                                lastDetectedCorners.get(),
+                                lastImageWidth.get().toInt(),
+                                lastImageHeight.get().toInt()
                             )
-                            // Вся логика показа теперь внутри processCapturedImage → onDocumentCaptured
                         } catch (e: Exception) {
                             Log.e(TAG, "Processing error", e)
                             runOnUiThread {
@@ -1045,8 +669,7 @@ class CameraActivity : AppCompatActivity() {
         )
     }
 
-    // ==================== Обработка изображений ====================
-    // Возвращает сырое выпрямленное и обрезанное изображение (без фильтров)
+    // ==================== Обработка снимка ====================
     private fun getRawDocumentMat(image: Mat, corners: Array<Point>? = null): Mat? {
         val finalCorners = corners ?: DocumentDetector.findDocumentCorners(image)
         if (finalCorners == null || finalCorners.size != 4) return null
@@ -1056,7 +679,6 @@ class CameraActivity : AppCompatActivity() {
         return cropped
     }
 
-    // Новая версия processCapturedImage – сохраняет сырое изображение и передаёт в onDocumentCaptured
     private fun processCapturedImage(
         imagePath: String,
         detectedCorners: Array<Point>?,
@@ -1104,26 +726,23 @@ class CameraActivity : AppCompatActivity() {
             return
         }
 
-        // === АВТОПОВОРОТ ===
+        // Автоповорот
         val orientedMat = if (isAutoRotateEnabled()) {
             runOnUiThread {
                 progressText.text = getString(R.string.camera_detecting_orientation)
                 progressText.visibility = View.VISIBLE
             }
             val angle = detectBestRotation(rawMat)
-            Log.d(TAG, "Auto-rotate: best angle = $angle°")
+            if (BuildConfig.DEBUG) Log.d(TAG, "Auto-rotate: best angle = $angle°")
             val result = if (angle != 0) {
                 val rotated = rotateMat(rawMat, angle)
                 rawMat.release()
                 rotated
             } else rawMat
-            runOnUiThread {
-                progressText.visibility = View.GONE
-            }
+            runOnUiThread { progressText.visibility = View.GONE }
             result
         } else rawMat
 
-        // Сохраняем сырое изображение для возможной обрезки (cropActivity)
         val rawFile = File(cacheDir, "raw_${System.currentTimeMillis()}.jpg")
         if (!Imgcodecs.imwrite(rawFile.absolutePath, orientedMat)) {
             orientedMat.release()
@@ -1136,32 +755,19 @@ class CameraActivity : AppCompatActivity() {
         }
         originalImagePath.set(rawFile.absolutePath)
 
-        // Передаём в onDocumentCaptured для применения фильтра и отображения
         runOnUiThread {
-            onDocumentCaptured(orientedMat) // внутри клонирует в baseMat
+            onDocumentCaptured(orientedMat)
             progressBar.visibility = View.GONE
             captureButton.isEnabled = true
         }
     }
 
     // ==================== UI: результат ====================
-    private fun setResultBitmap(newBitmap: Bitmap?) {
-        val old = currentResultBitmap.getAndSet(null)
-        if (old != null && !old.isRecycled) {
-            old.recycle()
-        }
-        currentResultBitmap.set(newBitmap)
-    }
-
     private fun retakePicture() {
         deleteFileIfExists(originalImagePath.get())
-        deleteFileIfExists(processedImagePath.get()) // если используется
         originalImagePath.set(null)
-        processedImagePath.set(null)
         capturedPhotoPath.set(null)
-        setResultBitmap(null)
 
-        // Очищаем кеш фильтров
         filterCache.values.forEach { it.release() }
         filterCache.clear()
         baseMat?.release()
@@ -1176,9 +782,10 @@ class CameraActivity : AppCompatActivity() {
         overlay.visibility = View.VISIBLE
         captureButton.visibility = View.VISIBLE
         resultImageView.visibility = View.GONE
+        findViewById<View>(R.id.bottomSheet).visibility = View.GONE
+        findViewById<View>(R.id.filterPanel).visibility = View.GONE
         actionsLayout.visibility = View.GONE
         retakeButton.visibility = View.GONE
-        findViewById<View>(R.id.filterPanel).visibility = View.GONE
         cropButton.visibility = View.GONE
         saveResultButton.visibility = View.GONE
         hdrButton.visibility = View.VISIBLE
@@ -1209,27 +816,25 @@ class CameraActivity : AppCompatActivity() {
                 } else {
                     FileManager.saveToPdf(this, matToSave)
                 }
-                // Копируем в SAF-папку, если выбрана
+
                 FileManager.copyToSaveFolderIfSet(this, pdfFile)
 
-                // Сохраняем индекс для поиска (в фоне — не блокируем)
                 if (visionText != null && visionText.text.isNotBlank()) {
                     FileManager.saveIndexForFile(this, pdfFile.name, visionText.text)
                 } else {
-                    // OCR не выполнялся — запускаем в фоне после сохранения
                     runBackgroundOcrIndexing(pdfFile.name, matToSave)
                 }
+
                 val resultIntent = Intent().apply {
                     putExtra("savedPdfPath", pdfFile.absolutePath)
                     putExtra("savedPdfName", pdfFile.name)
                 }
+
                 runOnUiThread {
                     progressBar.visibility = View.GONE
                     saveResultButton.isEnabled = true
                     setResult(RESULT_OK, resultIntent)
-                    DocumentActions.showSavedDialog(this, pdfFile) {
-                        finish()
-                    }
+                    DocumentActions.showSavedDialog(this, pdfFile) { finish() }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Save error", e)
@@ -1240,22 +845,81 @@ class CameraActivity : AppCompatActivity() {
                         this,
                         getString(R.string.camera_save_failed, e.message ?: ""),
                         Toast.LENGTH_LONG
-                    ).show()                }
+                    ).show()
+                }
             } finally {
                 matToSave.release()
             }
         }
     }
 
-    /**
-     * Запускает OCR в фоне и сохраняет индекс для поиска.
-     * Не блокирует пользователя — работает после сохранения PDF.
-     */
+    private fun saveDocumentAsJpg() {
+        val mat = baseMat ?: run {
+            Toast.makeText(this, getString(R.string.camera_no_image), Toast.LENGTH_SHORT).show()
+            return
+        }
+        val finalMat = filterCache[currentFilter] ?: mat
+        if (finalMat.empty()) {
+            Toast.makeText(this, getString(R.string.camera_empty_image), Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        progressBar.visibility = View.VISIBLE
+        saveResultButton.isEnabled = false
+
+        saveExecutor.execute {
+            val matToSave = finalMat.clone()
+            try {
+                val jpgFile = FileManager.saveToJpg(this, matToSave)
+                FileManager.copyToSaveFolderIfSet(this, jpgFile)
+
+                val resultIntent = Intent().apply {
+                    putExtra("savedPdfPath", jpgFile.absolutePath)
+                    putExtra("savedPdfName", jpgFile.name)
+                }
+
+                runOnUiThread {
+                    progressBar.visibility = View.GONE
+                    saveResultButton.isEnabled = true
+                    setResult(RESULT_OK, resultIntent)
+                    androidx.appcompat.app.AlertDialog.Builder(this)
+                        .setTitle(getString(R.string.save_jpg_saved))
+                        .setMessage(jpgFile.name)
+                        .setPositiveButton(getString(R.string.common_open)) { _, _ ->
+                            DocumentActions.openImage(this, jpgFile)
+                            finish()
+                        }
+                        .setNeutralButton(getString(R.string.common_share)) { _, _ ->
+                            DocumentActions.shareImage(this, jpgFile)
+                            finish()
+                        }
+                        .setNegativeButton(getString(R.string.common_done)) { _, _ -> finish() }
+                        .setCancelable(false)
+                        .show()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "saveDocumentAsJpg error", e)
+                runOnUiThread {
+                    progressBar.visibility = View.GONE
+                    saveResultButton.isEnabled = true
+                    Toast.makeText(
+                        this,
+                        getString(R.string.camera_save_failed, e.message ?: ""),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            } finally {
+                matToSave.release()
+            }
+        }
+    }
+
     private fun runBackgroundOcrIndexing(pdfName: String, mat: Mat) {
         val matCopy = mat.clone()
-        Thread {
+        processingExecutor.execute {
+            var bitmap: Bitmap? = null
             try {
-                val bitmap = matToBitmap(matCopy)
+                bitmap = matToBitmap(matCopy)
                 val image = InputImage.fromBitmap(bitmap, 0)
                 getTextRecognizer().process(image)
                     .addOnSuccessListener { visionText ->
@@ -1272,14 +936,13 @@ class CameraActivity : AppCompatActivity() {
                     }
             } catch (e: Exception) {
                 Log.e(TAG, "runBackgroundOcrIndexing error", e)
+                bitmap?.recycle()
                 matCopy.release()
             }
-        }.start()
+        }
     }
 
-    /**
-     * Мультирежим: добавляет текущую страницу в репозиторий и возвращает к камере.
-     */
+    // ==================== Мультирежим ====================
     private fun addCurrentPageToRepository() {
         val mat = baseMat ?: run {
             Toast.makeText(this, getString(R.string.camera_no_image), Toast.LENGTH_SHORT).show()
@@ -1291,12 +954,8 @@ class CameraActivity : AppCompatActivity() {
             return
         }
 
-        // Делаем thumbnail для UI (позже, если понадобится экран списка страниц)
         val thumbBitmap = matToBitmap(filtered)
-        val scaledThumb = Bitmap.createScaledBitmap(
-            thumbBitmap,
-            200, 260, true
-        )
+        val scaledThumb = Bitmap.createScaledBitmap(thumbBitmap, 200, 260, true)
         thumbBitmap.recycle()
 
         try {
@@ -1313,17 +972,16 @@ class CameraActivity : AppCompatActivity() {
             return
         }
 
-        Toast.makeText(this, getString(R.string.multi_page_added, PageRepository.getCount()), Toast.LENGTH_SHORT).show()
+        Toast.makeText(
+            this,
+            getString(R.string.multi_page_added, PageRepository.getCount()),
+            Toast.LENGTH_SHORT
+        ).show()
 
-        // Возвращаемся в режим камеры
         returnToCameraAfterPageAdded()
     }
 
-    /**
-     * Сбрасывает текущее состояние и показывает превью камеры для следующей страницы.
-     */
     private fun returnToCameraAfterPageAdded() {
-        // Освобождаем текущий baseMat и кэш
         baseMat?.release()
         baseMat = null
         filterCache.values.forEach { it.release() }
@@ -1334,11 +992,11 @@ class CameraActivity : AppCompatActivity() {
         originalImagePath.set(null)
         capturedPhotoPath.set(null)
 
-        // UI обратно к камере
         previewView.visibility = View.VISIBLE
         overlay.visibility = View.VISIBLE
         captureButton.visibility = View.VISIBLE
         resultImageView.visibility = View.GONE
+        findViewById<View>(R.id.bottomSheet).visibility = View.GONE
         findViewById<View>(R.id.filterPanel).visibility = View.GONE
         actionsLayout.visibility = View.GONE
         retakeButton.visibility = View.GONE
@@ -1348,16 +1006,10 @@ class CameraActivity : AppCompatActivity() {
         aiButton.visibility = View.VISIBLE
 
         analysisPaused.set(false)
-
-        // ← Обновляем счётчик, НЕ скрываем
-        updatePageCounter()
         refreshPagesList()
     }
-    /**
-     * Мультирежим: собирает все страницы в PDF и завершает работу.
-     */
+
     private fun finishMultiPageSession() {
-        // Добавляем текущую страницу, если её ещё нет в репозитории
         val mat = baseMat
         if (mat != null) {
             val filtered = filterCache[currentFilter] ?: mat
@@ -1393,7 +1045,6 @@ class CameraActivity : AppCompatActivity() {
                 val pdfFile = FileManager.saveBatchToPdfWithText(this, pages)
                 FileManager.copyToSaveFolderIfSet(this, pdfFile)
 
-                // Индексируем текст со всех страниц
                 val combinedText = pages.mapNotNull { it.visionText?.text }
                     .filter { it.isNotBlank() }
                     .joinToString("\n\n---\n\n")
@@ -1406,27 +1057,229 @@ class CameraActivity : AppCompatActivity() {
                     putExtra("savedPdfName", pdfFile.name)
                 }
                 PageRepository.clear()
+
                 runOnUiThread {
                     progressBar.visibility = View.GONE
                     saveResultButton.isEnabled = true
                     setResult(RESULT_OK, resultIntent)
-                    DocumentActions.showSavedDialog(this, pdfFile, pages.size) {
-                        finish()
-                    }
+                    DocumentActions.showSavedDialog(this, pdfFile, pages.size) { finish() }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "finishMultiPageSession error", e)
                 runOnUiThread {
                     progressBar.visibility = View.GONE
                     saveResultButton.isEnabled = true
-                    Toast.makeText(this, getString(R.string.camera_save_failed, e.message ?: ""), Toast.LENGTH_LONG).show()
+                    Toast.makeText(
+                        this,
+                        getString(R.string.camera_save_failed, e.message ?: ""),
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             }
         }
     }
 
+    private fun finishMultiPageAsJpg() {
+        val mat = baseMat
+        if (mat != null) {
+            val filtered = filterCache[currentFilter] ?: mat
+            if (!filtered.empty()) {
+                val thumbBitmap = matToBitmap(filtered)
+                val scaledThumb = Bitmap.createScaledBitmap(thumbBitmap, 200, 260, true)
+                thumbBitmap.recycle()
+                try {
+                    PageRepository.addPage(
+                        context = this,
+                        mat = filtered,
+                        visionText = lastRecognizedText.get(),
+                        thumbnail = scaledThumb
+                    )
+                } catch (e: Exception) {
+                    Log.e(TAG, "finishMultiPageAsJpg: addPage error", e)
+                    if (!scaledThumb.isRecycled) scaledThumb.recycle()
+                }
+            }
+        }
+
+        val pages = PageRepository.getAll()
+        if (pages.isEmpty()) {
+            Toast.makeText(this, getString(R.string.multi_page_no_pages), Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        progressBar.visibility = View.VISIBLE
+        saveResultButton.isEnabled = false
+
+        saveExecutor.execute {
+            try {
+                val folder = FileManager.saveBatchToJpg(this, pages)
+                val files = folder.listFiles()?.sortedBy { it.name } ?: emptyList()
+                files.forEach { FileManager.copyToSaveFolderIfSet(this, it) }
+
+                val resultIntent = Intent().apply {
+                    putExtra("savedPdfPath", folder.absolutePath)
+                    putExtra("savedPdfName", folder.name)
+                }
+                PageRepository.clear()
+
+                runOnUiThread {
+                    progressBar.visibility = View.GONE
+                    saveResultButton.isEnabled = true
+                    setResult(RESULT_OK, resultIntent)
+                    androidx.appcompat.app.AlertDialog.Builder(this)
+                        .setTitle(getString(R.string.save_multi_jpg_saved, files.size))
+                        .setMessage(folder.name)
+                        .setPositiveButton(getString(R.string.save_open_first)) { _, _ ->
+                            files.firstOrNull()?.let { DocumentActions.openImage(this, it) }
+                            finish()
+                        }
+                        .setNeutralButton(getString(R.string.save_share_all)) { _, _ ->
+                            DocumentActions.shareImages(this, files)
+                            finish()
+                        }
+                        .setNegativeButton(getString(R.string.common_done)) { _, _ -> finish() }
+                        .setCancelable(false)
+                        .show()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "finishMultiPageAsJpg error", e)
+                runOnUiThread {
+                    progressBar.visibility = View.GONE
+                    saveResultButton.isEnabled = true
+                    Toast.makeText(
+                        this,
+                        getString(R.string.camera_save_failed, e.message ?: ""),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
+    private fun setupMultiPageUI() {
+        (saveResultButton as? MaterialButton)?.text = getString(R.string.save_finish_multi)
+        (retakeButton as? MaterialButton)?.text = getString(R.string.multi_page_add_btn)
+
+        pagesAdapter = PageThumbnailAdapter(
+            onPageClick = { position -> showFullPageViewer(position) },
+            onPageLongClick = { position ->
+                androidx.appcompat.app.AlertDialog.Builder(this)
+                    .setTitle(getString(R.string.page_list_delete_title, position + 1))
+                    .setPositiveButton(getString(R.string.common_delete)) { _, _ ->
+                        PageRepository.removeAt(position)
+                        refreshPagesList()
+                    }
+                    .setNegativeButton(getString(R.string.common_cancel), null)
+                    .show()
+            }
+        )
+
+        pagesInlineRecycler.layoutManager = androidx.recyclerview.widget.LinearLayoutManager(
+            this, androidx.recyclerview.widget.LinearLayoutManager.HORIZONTAL, false
+        )
+        pagesInlineRecycler.adapter = pagesAdapter
+
+        togglePagesButton.setOnClickListener {
+            isShowingPages = !isShowingPages
+            applyPagesViewState()
+        }
+
+        isShowingPages = true
+        applyPagesViewState()
+
+        Toast.makeText(this, getString(R.string.multi_page_hint), Toast.LENGTH_LONG).show()
+    }
+
+    private fun applyPagesViewState() {
+        if (!multiPageMode) return
+
+        val pagesVis = if (isShowingPages) View.VISIBLE else View.GONE
+        val filtersVis = if (isShowingPages) View.GONE else View.VISIBLE
+
+        pagesHeaderRow.visibility = View.VISIBLE
+        pagesInlineRecycler.visibility = pagesVis
+        findViewById<View>(R.id.filterPanel).visibility = filtersVis
+        actionButtonsRow.visibility = filtersVis
+
+        pagesHeaderTitle.text = if (isShowingPages) {
+            getString(R.string.pages_title, PageRepository.getCount())
+        } else {
+            getString(R.string.filters_title)
+        }
+
+        if (isShowingPages) refreshPagesList()
+    }
+
+    private fun refreshPagesList() {
+        if (!multiPageMode) return
+        val pages = PageRepository.getAll()
+        pagesAdapter?.submitPages(pages)
+        pagesHeaderTitle.text = getString(R.string.pages_title, pages.size)
+    }
+
+    private fun showFullPageViewer(startPosition: Int) {
+        val pages = PageRepository.getAll()
+        if (pages.isEmpty() || startPosition !in pages.indices) return
+
+        val view = layoutInflater.inflate(R.layout.dialog_page_viewer, null)
+        val dialog = android.app.Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        dialog.setContentView(view)
+
+        val imageView = view.findViewById<android.widget.ImageView>(R.id.fullImageView)
+        val indicator = view.findViewById<android.widget.TextView>(R.id.pageIndicator)
+        val prevBtn = view.findViewById<View>(R.id.prevButton)
+        val nextBtn = view.findViewById<View>(R.id.nextButton)
+        val deleteBtn = view.findViewById<View>(R.id.deletePageButton)
+
+        var currentIndex = startPosition
+
+        fun render() {
+            val list = PageRepository.getAll()
+            if (currentIndex !in list.indices) {
+                dialog.dismiss()
+                return
+            }
+            val page = list[currentIndex]
+            imageView.setImageBitmap(page.thumbnail)
+            indicator.text = getString(R.string.page_viewer_indicator, currentIndex + 1, list.size)
+
+            prevBtn.isEnabled = currentIndex > 0
+            nextBtn.isEnabled = currentIndex < list.size - 1
+            prevBtn.alpha = if (prevBtn.isEnabled) 1f else 0.4f
+            nextBtn.alpha = if (nextBtn.isEnabled) 1f else 0.4f
+        }
+
+        prevBtn.setOnClickListener {
+            if (currentIndex > 0) { currentIndex--; render() }
+        }
+        nextBtn.setOnClickListener {
+            if (currentIndex < PageRepository.getCount() - 1) { currentIndex++; render() }
+        }
+        deleteBtn.setOnClickListener {
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle(getString(R.string.page_list_delete_title, currentIndex + 1))
+                .setPositiveButton(getString(R.string.common_delete)) { _, _ ->
+                    PageRepository.removeAt(currentIndex)
+                    val remaining = PageRepository.getCount()
+                    if (remaining == 0) dialog.dismiss()
+                    else {
+                        if (currentIndex >= remaining) currentIndex = remaining - 1
+                        render()
+                    }
+                    refreshPagesList()
+                }
+                .setNegativeButton(getString(R.string.common_cancel), null)
+                .show()
+        }
+
+        view.setOnClickListener { dialog.dismiss() }
+
+        dialog.show()
+        render()
+    }
+
+    // ==================== Crop ====================
     private fun cropDocument() {
-        // Открываем оригинальное фото (с камеры), а не выпрямленное
         val sourcePath = capturedPhotoPath.get() ?: originalImagePath.get()
         if (sourcePath == null || !File(sourcePath).exists()) {
             Toast.makeText(this, getString(R.string.camera_no_image_to_crop), Toast.LENGTH_SHORT).show()
@@ -1461,13 +1314,10 @@ class CameraActivity : AppCompatActivity() {
                     return@execute
                 }
 
-                // Сохраняем сырое
                 val rawFile = File(cacheDir, "raw_${System.currentTimeMillis()}.jpg")
                 if (Imgcodecs.imwrite(rawFile.absolutePath, rawMat)) {
                     originalImagePath.set(rawFile.absolutePath)
-                    runOnUiThread {
-                        onDocumentCaptured(rawMat)
-                    }
+                    runOnUiThread { onDocumentCaptured(rawMat) }
                 } else {
                     rawMat.release()
                     runOnUiThread { Toast.makeText(this, getString(R.string.camera_save_error), Toast.LENGTH_SHORT).show() }
@@ -1498,6 +1348,230 @@ class CameraActivity : AppCompatActivity() {
         return Array(4) { i ->
             Point(corners[i].x * scale + offsetX, corners[i].y * scale + offsetY)
         }
+    }
+
+    // ==================== Поворот ====================
+    private fun rotateMat(source: Mat, degrees: Int): Mat {
+        val rotated = Mat()
+        when (degrees % 360) {
+            90 -> Core.rotate(source, rotated, Core.ROTATE_90_CLOCKWISE)
+            180 -> Core.rotate(source, rotated, Core.ROTATE_180)
+            270 -> Core.rotate(source, rotated, Core.ROTATE_90_COUNTERCLOCKWISE)
+            else -> source.copyTo(rotated)
+        }
+        return rotated
+    }
+
+    private fun isAutoRotateEnabled(): Boolean {
+        val prefs = getSharedPreferences(SettingsActivity.PREFS_SETTINGS, MODE_PRIVATE)
+        return prefs.getBoolean(SettingsActivity.KEY_AUTO_ROTATE, false)
+    }
+
+    private fun detectBestRotation(source: Mat): Int {
+        val maxSide = 500.0
+        val longest = maxOf(source.cols(), source.rows()).toDouble()
+        val small = Mat()
+        if (longest <= maxSide) {
+            source.copyTo(small)
+        } else {
+            val scale = maxSide / longest
+            Imgproc.resize(
+                source, small,
+                Size(source.cols() * scale, source.rows() * scale),
+                0.0, 0.0, Imgproc.INTER_AREA
+            )
+        }
+
+        val angles = intArrayOf(0, 90, 180, 270)
+        var bestAngle = 0
+        var bestScore = 0
+
+        for (angle in angles) {
+            val testMat = if (angle == 0) small.clone() else rotateMat(small, angle)
+            val score = runOcrCharCount(testMat)
+            testMat.release()
+            if (BuildConfig.DEBUG) Log.d(TAG, "Auto-rotate test ${angle}°: $score")
+            if (score > bestScore) {
+                bestScore = score
+                bestAngle = angle
+            }
+        }
+        small.release()
+
+        return if (bestScore == 0) 0 else bestAngle
+    }
+
+    private fun runOcrCharCount(mat: Mat): Int {
+        var bitmap: Bitmap? = null
+        return try {
+            bitmap = matToBitmap(mat)
+            val image = InputImage.fromBitmap(bitmap, 0)
+            val task = getTextRecognizer().process(image)
+            val visionText = Tasks.await(task)
+            visionText.text.length
+        } catch (e: Exception) {
+            Log.e(TAG, "runOcrCharCount error", e)
+            0
+        } finally {
+            bitmap?.recycle()
+        }
+    }
+
+    private fun rotateCurrentImage(degrees: Int) {
+        val mat = baseMat ?: run {
+            Toast.makeText(this, getString(R.string.camera_no_image), Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val rotated = rotateMat(mat, degrees)
+        mat.release()
+        baseMat = rotated
+
+        filterCache.values.forEach { it.release() }
+        filterCache.clear()
+
+        applyFilter(currentFilter)
+        Toast.makeText(this, getString(R.string.rotate_done, degrees), Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showRotateDialog() {
+        val options = arrayOf(
+            getString(R.string.rotate_left),
+            getString(R.string.rotate_right),
+            getString(R.string.rotate_180)
+        )
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(getString(R.string.rotate_title))
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> rotateCurrentImage(270)
+                    1 -> rotateCurrentImage(90)
+                    2 -> rotateCurrentImage(180)
+                }
+            }
+            .setNegativeButton(getString(R.string.common_cancel), null)
+            .show()
+    }
+
+    // ==================== Фильтры ====================
+    private fun setupFilterButtons() {
+        findViewById<View>(R.id.filterOriginal).setOnClickListener { applyFilter("original") }
+        findViewById<View>(R.id.filterPhoto).setOnClickListener { applyFilter("photo") }
+        findViewById<View>(R.id.filterColor).setOnClickListener { applyFilter("color") }
+        findViewById<View>(R.id.filterGray).setOnClickListener { applyFilter("gray") }
+        findViewById<View>(R.id.filterBW).setOnClickListener { applyFilter("bw") }
+        findViewById<View>(R.id.filterShadow).setOnClickListener { applyFilter("shadow") }
+        findViewById<View>(R.id.filterSharp).setOnClickListener { applyFilter("sharp") }
+    }
+
+    private fun applyFilter(filter: String) {
+        val mat = baseMat ?: return
+
+        val resultMat: Mat
+        var shouldRelease = false
+
+        if (filter == "original") {
+            resultMat = mat.clone()
+            shouldRelease = true
+        } else {
+            resultMat = filterCache[filter] ?: DocumentDetector.enhanceScan(mat, filter).also {
+                filterCache[filter] = it
+            }
+        }
+
+        val bitmap = matToBitmap(resultMat)
+        if (shouldRelease) resultMat.release()
+
+        runOnUiThread {
+            findViewById<ImageView>(R.id.resultImageView).setImageBitmap(bitmap)
+        }
+        updateFilterButtonStates(filter)
+        currentFilter = filter
+    }
+
+    private fun updateFilterButtonStates(activeFilter: String) {
+        val buttonMap = mapOf(
+            R.id.filterOriginal to "original",
+            R.id.filterPhoto to "photo",
+            R.id.filterColor to "color",
+            R.id.filterGray to "gray",
+            R.id.filterBW to "bw",
+            R.id.filterShadow to "shadow",
+            R.id.filterSharp to "sharp"
+        )
+
+        buttonMap.forEach { (id, tag) ->
+            val button = findViewById<MaterialButton>(id)
+            val isActive = (tag == activeFilter)
+            val colorRes = if (isActive) R.color.primary_color else R.color.grey_600
+            button.backgroundTintList = ContextCompat.getColorStateList(this, colorRes)
+        }
+    }
+
+    private fun matToBitmap(mat: Mat): Bitmap {
+        val rgba = Mat()
+        when (mat.channels()) {
+            1 -> Imgproc.cvtColor(mat, rgba, Imgproc.COLOR_GRAY2RGBA)
+            3 -> Imgproc.cvtColor(mat, rgba, Imgproc.COLOR_BGR2RGBA)
+            4 -> mat.copyTo(rgba)
+            else -> throw IllegalArgumentException("Unsupported channels: ${mat.channels()}")
+        }
+
+        val bmp = Bitmap.createBitmap(rgba.cols(), rgba.rows(), Bitmap.Config.ARGB_8888)
+        try {
+            Utils.matToBitmap(rgba, bmp)
+        } finally {
+            rgba.release()
+        }
+        return bmp
+    }
+
+    private fun onDocumentCaptured(warped: Mat) {
+        baseMat?.release()
+        baseMat = warped.clone()
+        warped.release()
+        currentFilter = "color"
+        filterCache.values.forEach { it.release() }
+        filterCache.clear()
+        applyFilter(currentFilter)
+        showResultUI(true)
+        if (multiPageMode) refreshPagesList()
+    }
+
+    private fun showResultUI(show: Boolean) {
+        val sheetVis = if (show) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.bottomSheet).visibility = sheetVis
+
+        if (show) {
+            findViewById<View>(R.id.actionsLayout).visibility = View.VISIBLE
+            cropButton.visibility = View.VISIBLE
+            saveResultButton.visibility = View.VISIBLE
+            retakeButton.visibility = View.VISIBLE
+
+            if (multiPageMode) {
+                pagesHeaderRow.visibility = View.VISIBLE
+                applyPagesViewState()
+            } else {
+                findViewById<View>(R.id.filterPanel).visibility = View.VISIBLE
+                actionButtonsRow.visibility = View.VISIBLE
+                pagesHeaderRow.visibility = View.GONE
+                pagesInlineRecycler.visibility = View.GONE
+            }
+        }
+
+        captureButton.visibility = if (show) View.GONE else View.VISIBLE
+        resultImageView.visibility = if (show) View.VISIBLE else View.GONE
+        previewView.visibility = if (show) View.GONE else View.VISIBLE
+        overlay.visibility = if (show) View.GONE else View.VISIBLE
+    }
+
+    private fun releaseResources() {
+        originalImagePath.set(null)
+        DocumentDetector.release()
+    }
+
+    private fun deleteFileIfExists(path: String?) {
+        path?.let { File(it).delete() }
     }
 
     // ==================== HDR ====================
@@ -1543,10 +1617,7 @@ class CameraActivity : AppCompatActivity() {
                 )
 
                 if (latch.await(5, TimeUnit.SECONDS)) {
-                    if (success) files.add(file) else {
-                        file.delete()
-                        break
-                    }
+                    if (success) files.add(file) else { file.delete(); break }
                 } else {
                     Log.e(TAG, "Timeout waiting for HDR frame EV $ev")
                     file.delete()
@@ -1554,11 +1625,8 @@ class CameraActivity : AppCompatActivity() {
                 }
             }
         } finally {
-            try {
-                cameraControl.setExposureCompensationIndex(0)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to reset exposure compensation", e)
-            }
+            try { cameraControl.setExposureCompensationIndex(0) }
+            catch (e: Exception) { Log.e(TAG, "Failed to reset exposure compensation", e) }
         }
 
         files
@@ -1577,7 +1645,6 @@ class CameraActivity : AppCompatActivity() {
         var srcPoints: MatOfPoint2f? = null
         var dstPoints: MatOfPoint2f? = null
         var homography: Mat? = null
-        var aligned: Mat? = null
         var orb: ORB? = null
         var matcher: DescriptorMatcher? = null
 
@@ -1617,7 +1684,7 @@ class CameraActivity : AppCompatActivity() {
             homography = Geometry.findHomography(srcPoints, dstPoints, Geometry.RANSAC, 5.0)
             if (homography.empty()) return target.clone()
 
-            aligned = Mat()
+            val aligned = Mat()
             Imgproc.warpPerspective(target, aligned, homography, reference.size())
             aligned
         } catch (e: Exception) {
@@ -1657,7 +1724,7 @@ class CameraActivity : AppCompatActivity() {
             val mats = mutableListOf<Mat>()
             val aligned = mutableListOf<Mat>()
             var merged8u: Mat? = null
-            var rawMat: Mat? = null   // ← вместо processed
+            var rawMat: Mat? = null
 
             try {
                 analysisPaused.set(true)
@@ -1692,18 +1759,10 @@ class CameraActivity : AppCompatActivity() {
                     else aligned.add(alignImages(reference, mats[i]))
                 }
 
-                val mergedFloat = mergeHDR(aligned)
-                merged8u = mergedFloat
+                merged8u = mergeHDR(aligned)
 
-                // ---- ИЗМЕНЕНИЕ НАЧИНАЕТСЯ ЗДЕСЬ ----
-                // Находим углы на HDR-изображении
                 val corners = DocumentDetector.findDocumentCorners(merged8u)
-                // Получаем сырое выпрямленное и обрезанное изображение (без фильтров)
-                rawMat = if (corners != null && corners.size == 4) {
-                    getRawDocumentMat(merged8u, corners)   // ← новый метод, который мы добавили
-                } else {
-                    getRawDocumentMat(merged8u, null)
-                }
+                rawMat = getRawDocumentMat(merged8u, corners)
 
                 if (rawMat == null) {
                     runOnUiThread {
@@ -1715,13 +1774,11 @@ class CameraActivity : AppCompatActivity() {
                     return@execute
                 }
 
-                // Сохраняем сырое изображение в файл
                 val rawFile = File(cacheDir, "raw_hdr_${System.currentTimeMillis()}.jpg")
                 if (Imgcodecs.imwrite(rawFile.absolutePath, rawMat)) {
                     originalImagePath.set(rawFile.absolutePath)
-                    // Передаём в onDocumentCaptured для применения фильтра
                     runOnUiThread {
-                        onDocumentCaptured(rawMat)   // ← вместо showResult()
+                        onDocumentCaptured(rawMat)
                         progressBar.visibility = View.GONE
                         hdrButton.isEnabled = true
                         captureButton.isEnabled = true
@@ -1735,7 +1792,6 @@ class CameraActivity : AppCompatActivity() {
                         Toast.makeText(this, getString(R.string.camera_save_error), Toast.LENGTH_SHORT).show()
                     }
                 }
-                // ---- ИЗМЕНЕНИЕ ЗАКАНЧИВАЕТСЯ ----
             } catch (e: Exception) {
                 Log.e(TAG, "HDR error", e)
                 runOnUiThread {
@@ -1766,9 +1822,7 @@ class CameraActivity : AppCompatActivity() {
         val scanner = GmsDocumentScanning.getClient(options)
         scanner.getStartScanIntent(this)
             .addOnSuccessListener { intentSender ->
-                mlKitScannerLauncher.launch(
-                    IntentSenderRequest.Builder(intentSender).build()
-                )
+                mlKitScannerLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
             }
             .addOnFailureListener { e ->
                 Log.e(TAG, "ML Kit scanner error", e)
@@ -1795,35 +1849,43 @@ class CameraActivity : AppCompatActivity() {
         progressBar.visibility = View.VISIBLE
         processingExecutor.execute {
             val mat = Mat()
-            Utils.bitmapToMat(bitmap, mat)
-            if (mat.channels() == 4) {
-                Imgproc.cvtColor(mat, mat, Imgproc.COLOR_RGBA2BGR)
-            }
-            // Получаем сырое выпрямленное изображение (если ML Kit уже выпрямил – можно пропустить)
-            val rawMat = getRawDocumentMat(mat, null)
-            if (rawMat == null) {
-                // используем mat как есть
-                val rawFile = File(cacheDir, "mlkit_raw_${System.currentTimeMillis()}.jpg")
-                if (Imgcodecs.imwrite(rawFile.absolutePath, mat)) {
-                    originalImagePath.set(rawFile.absolutePath)
-                    runOnUiThread { onDocumentCaptured(mat); progressBar.visibility = View.GONE }
-                }
-            } else {
-                // rawMat — новый Mat, mat больше не нужен
-                mat.release()
-                val rawFile = File(cacheDir, "mlkit_raw_${System.currentTimeMillis()}.jpg")
-                if (Imgcodecs.imwrite(rawFile.absolutePath, rawMat)) {
-                    originalImagePath.set(rawFile.absolutePath)
-                    runOnUiThread { onDocumentCaptured(rawMat); progressBar.visibility = View.GONE }
+            var bgrMat: Mat? = null
+            try {
+                Utils.bitmapToMat(bitmap, mat)
+                val workingMat = if (mat.channels() == 4) {
+                    Mat().also { bgrMat = it; Imgproc.cvtColor(mat, it, Imgproc.COLOR_RGBA2BGR) }
+                } else mat
+
+                val rawMat = getRawDocumentMat(workingMat, null)
+                if (rawMat == null) {
+                    val rawFile = File(cacheDir, "mlkit_raw_${System.currentTimeMillis()}.jpg")
+                    if (Imgcodecs.imwrite(rawFile.absolutePath, workingMat)) {
+                        originalImagePath.set(rawFile.absolutePath)
+                        runOnUiThread { onDocumentCaptured(workingMat); progressBar.visibility = View.GONE }
+                    }
                 } else {
-                    rawMat.release()
+                    if (workingMat !== mat) mat.release()
+                    val rawFile = File(cacheDir, "mlkit_raw_${System.currentTimeMillis()}.jpg")
+                    if (Imgcodecs.imwrite(rawFile.absolutePath, rawMat)) {
+                        originalImagePath.set(rawFile.absolutePath)
+                        runOnUiThread { onDocumentCaptured(rawMat); progressBar.visibility = View.GONE }
+                    } else {
+                        rawMat.release()
+                        runOnUiThread { progressBar.visibility = View.GONE }
+                    }
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "handleMlKitResult error", e)
+                runOnUiThread { progressBar.visibility = View.GONE }
+            } finally {
+                mat.release()
+                bgrMat?.release()
+                bitmap.recycle()
             }
-            bitmap.recycle()
         }
     }
 
-    // ==================== Утилиты завершения ====================
+    // ==================== Завершение ====================
     private fun shutdownExecutors() {
         analysisExecutor.shutdown()
         processingExecutor.shutdown()
@@ -1839,272 +1901,6 @@ class CameraActivity : AppCompatActivity() {
             saveExecutor.shutdownNow()
             Thread.currentThread().interrupt()
         }
-    }
-
-    private fun onDocumentCaptured(warped: Mat) {
-        baseMat?.release()
-        baseMat = warped.clone()
-        warped.release()
-        currentFilter = "color"
-        // Освобождаем старый кеш
-        filterCache.values.forEach { it.release() }
-        filterCache.clear()
-        applyFilter(currentFilter)
-        showResultUI(true)
-        updatePageCounter()
-        if (multiPageMode) refreshPagesList()
-    }
-
-    private fun applyFilter(filter: String) {
-        val mat = baseMat ?: return
-
-        val resultMat: Mat
-        var shouldRelease = false
-
-        if (filter == "original") {
-            // всегда создаём клон — его нужно освободить после конвертации
-            resultMat = mat.clone()
-            shouldRelease = true
-        } else {
-            // берём из кеша или создаём и кешируем
-            resultMat = filterCache[filter] ?: DocumentDetector.enhanceScan(mat, filter).also {
-                filterCache[filter] = it
-            }
-            // кешированный Mat освобождать НЕЛЬЗЯ — он ещё пригодится
-        }
-
-        val bitmap = matToBitmap(resultMat)
-        if (shouldRelease) {
-            resultMat.release()
-        }
-
-        runOnUiThread {
-            findViewById<ImageView>(R.id.resultImageView).setImageBitmap(bitmap)
-        }
-        updateFilterButtonStates(filter)
-        currentFilter = filter
-    }
-
-    private fun matToBitmap(mat: Mat): Bitmap {
-        // Конвертируем BGR (формат OpenCV) в RGBA (формат Android Bitmap)
-        val rgba = Mat()
-        when (mat.channels()) {
-            1 -> Imgproc.cvtColor(mat, rgba, Imgproc.COLOR_GRAY2RGBA)
-            3 -> Imgproc.cvtColor(mat, rgba, Imgproc.COLOR_BGR2RGBA)
-            4 -> mat.copyTo(rgba)  // уже RGBA
-            else -> throw IllegalArgumentException("Unsupported channels: ${mat.channels()}")
-        }
-
-        val bmp = Bitmap.createBitmap(rgba.cols(), rgba.rows(), Bitmap.Config.ARGB_8888)
-        try {
-            org.opencv.android.Utils.matToBitmap(rgba, bmp)
-        } finally {
-            rgba.release()
-        }
-        return bmp
-    }
-
-    /**
-     * Поворачивает Mat на заданный угол: 90, 180, 270.
-     * Возвращает НОВЫЙ Mat — исходный не освобождается.
-     */
-    private fun rotateMat(source: Mat, degrees: Int): Mat {
-        val rotated = Mat()
-        when (degrees % 360) {
-            90 -> Core.rotate(source, rotated, Core.ROTATE_90_CLOCKWISE)
-            180 -> Core.rotate(source, rotated, Core.ROTATE_180)
-            270 -> Core.rotate(source, rotated, Core.ROTATE_90_COUNTERCLOCKWISE)
-            else -> source.copyTo(rotated)
-        }
-        return rotated
-    }
-
-    /**
-     * Проверяет, включён ли автоповорот в настройках.
-     */
-    private fun isAutoRotateEnabled(): Boolean {
-        val prefs = getSharedPreferences(SettingsActivity.PREFS_SETTINGS, MODE_PRIVATE)
-        return prefs.getBoolean(SettingsActivity.KEY_AUTO_ROTATE, false)
-    }
-
-    /**
-     * Определяет оптимальный угол поворота изображения (0/90/180/270),
-     * прогоняя OCR на 4 вариантах. Возвращает угол, на который
-     * нужно повернуть оригинал для правильной ориентации.
-     */
-    private fun detectBestRotation(source: Mat): Int {
-        val maxSide = 500.0
-        val longest = maxOf(source.cols(), source.rows()).toDouble()
-        val small = Mat()
-        if (longest <= maxSide) {
-            source.copyTo(small)
-        } else {
-            val scale = maxSide / longest
-            Imgproc.resize(
-                source, small,
-                Size(source.cols() * scale, source.rows() * scale),
-                0.0, 0.0, Imgproc.INTER_AREA
-            )
-        }
-
-        val angles = intArrayOf(0, 90, 180, 270)
-        var bestAngle = 0
-        var bestScore = 0
-
-        for (angle in angles) {
-            val testMat = if (angle == 0) small.clone() else rotateMat(small, angle)
-            val score = runOcrCharCount(testMat)
-            testMat.release()
-            Log.d(TAG, "Auto-rotate test ${angle}°: $score символов")
-            if (score > bestScore) {
-                bestScore = score
-                bestAngle = angle
-            }
-        }
-        small.release()
-
-        // Если ни один вариант не дал текста — ничего не поворачиваем
-        if (bestScore == 0) return 0
-        return bestAngle
-    }
-
-    /**
-     * Прогоняет OCR синхронно (в фоновом потоке) и возвращает количество символов.
-     * Блокирует текущий поток через Tasks.await — вызывать только из processingExecutor.
-     */
-    private fun runOcrCharCount(mat: Mat): Int {
-        return try {
-            val bitmap = matToBitmap(mat)
-            val image = InputImage.fromBitmap(bitmap, 0)
-            val task = getTextRecognizer().process(image)
-            val visionText = Tasks.await(task)
-            val count = visionText.text.length
-            bitmap.recycle()
-            count
-        } catch (e: Exception) {
-            Log.e(TAG, "runOcrCharCount error", e)
-            0
-        }
-    }
-
-    /**
-     * Поворачивает текущий baseMat и пересчитывает кэш фильтров.
-     */
-    private fun rotateCurrentImage(degrees: Int) {
-        val mat = baseMat ?: run {
-            Toast.makeText(this, getString(R.string.rotate_done, degrees), Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        // Поворачиваем baseMat
-        val rotated = rotateMat(mat, degrees)
-
-        // Освобождаем старый baseMat и заменяем
-        mat.release()
-        baseMat = rotated
-
-        // Кэш фильтров больше не валиден — пересчитываем
-        filterCache.values.forEach { it.release() }
-        filterCache.clear()
-
-        // Пересчитываем текущий фильтр
-        applyFilter(currentFilter)
-
-        Toast.makeText(this, getString(R.string.rotate_done, degrees), Toast.LENGTH_SHORT).show()
-    }
-
-    private fun showRotateDialog() {
-        val options = arrayOf(
-            getString(R.string.rotate_left),
-            getString(R.string.rotate_right),
-            getString(R.string.rotate_180)
-        )
-        androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle(getString(R.string.rotate_title))
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> rotateCurrentImage(270)
-                    1 -> rotateCurrentImage(90)
-                    2 -> rotateCurrentImage(180)
-                }
-            }
-            .setNegativeButton(getString(R.string.common_cancel), null)
-            .show()
-    }
-
-    private fun setupFilterButtons() {
-        findViewById<View>(R.id.filterOriginal).setOnClickListener { applyFilter("original") }
-        findViewById<View>(R.id.filterPhoto).setOnClickListener { applyFilter("photo") }
-        findViewById<View>(R.id.filterColor).setOnClickListener { applyFilter("color") }
-        findViewById<View>(R.id.filterGray).setOnClickListener { applyFilter("gray") }
-        findViewById<View>(R.id.filterBW).setOnClickListener { applyFilter("bw") }
-        findViewById<View>(R.id.filterShadow).setOnClickListener { applyFilter("shadow") }
-        findViewById<View>(R.id.filterSharp).setOnClickListener { applyFilter("sharp") }
-    }
-
-    private fun updateFilterButtonStates(activeFilter: String) {
-        val buttonMap = mapOf(
-            R.id.filterOriginal to "original",
-            R.id.filterPhoto to "photo",
-            R.id.filterColor to "color",
-            R.id.filterGray to "gray",
-            R.id.filterBW to "bw",
-            R.id.filterShadow to "shadow",
-            R.id.filterSharp to "sharp"
-        )
-
-        buttonMap.forEach { (id, tag) ->
-            val button = findViewById<com.google.android.material.button.MaterialButton>(id)
-            val isActive = (tag == activeFilter)
-            val colorRes = if (isActive) R.color.primary_color else R.color.grey_600
-            button.backgroundTintList = ContextCompat.getColorStateList(this, colorRes)
-        }
-    }
-
-    private fun showResultUI(show: Boolean) {
-        val sheetVis = if (show) View.VISIBLE else View.GONE
-
-        // Показываем/скрываем шторку целиком
-        findViewById<View>(R.id.bottomSheet).visibility = sheetVis
-
-        // Внутри шторки всё видно
-        if (show) {
-            findViewById<View>(R.id.actionsLayout).visibility = View.VISIBLE
-            cropButton.visibility = View.VISIBLE
-            saveResultButton.visibility = View.VISIBLE
-            retakeButton.visibility = View.VISIBLE
-
-            if (multiPageMode) {
-                // В мультирежиме показываем header + миниатюры/фильтры по состоянию
-                pagesHeaderRow.visibility = View.VISIBLE
-                applyPagesViewState()
-            } else {
-                // В обычном — фильтры + кнопки действий
-                findViewById<View>(R.id.filterPanel).visibility = View.VISIBLE
-                actionButtonsRow.visibility = View.VISIBLE
-                pagesHeaderRow.visibility = View.GONE
-                pagesInlineRecycler.visibility = View.GONE
-            }
-        }
-
-        // Скрываем камеру/кнопку съёмки, показываем результат
-        captureButton.visibility = if (show) View.GONE else View.VISIBLE
-        resultImageView.visibility = if (show) View.VISIBLE else View.GONE
-        previewView.visibility = if (show) View.GONE else View.VISIBLE
-        overlay.visibility = if (show) View.GONE else View.VISIBLE
-
-        if (multiPageMode) updatePageCounter()
-    }
-
-    private fun releaseResources() {
-        currentResultBitmap.getAndSet(null)?.recycle()
-        originalImagePath.set(null)
-        processedImagePath.set(null)
-        DocumentDetector.release()
-    }
-
-    private fun deleteFileIfExists(path: String?) {
-        path?.let { File(it).delete() }
     }
 
     companion object {

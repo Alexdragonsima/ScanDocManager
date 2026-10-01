@@ -20,6 +20,7 @@ import kotlinx.coroutines.withContext
 import org.opencv.android.OpenCVLoader
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -27,47 +28,51 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private var opencvLoaded = false
+
     private val dateFormatter = SimpleDateFormat("d MMM, HH:mm", Locale.forLanguageTag("ru"))
+    private val fileNameFormatter = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
+
+    private val allowedExtensions = setOf("pdf", "txt", "docx")
+
+    // ==================== LAUNCHERS ====================
 
     private val cameraLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK) {
-            val savedPdfPath = result.data?.getStringExtra("savedPdfPath")
             val savedPdfName = result.data?.getStringExtra("savedPdfName")
-            if (savedPdfPath != null) {
-                val displayName = savedPdfName ?: getString(R.string.main_saved_file)
-                Toast.makeText(
-                    this,
-                    getString(R.string.main_saved_toast, displayName),
-                    Toast.LENGTH_LONG
-                ).show()
-                loadDashboard()
-            }
+            val displayName = savedPdfName ?: getString(R.string.main_saved_file)
+            Toast.makeText(
+                this,
+                getString(R.string.main_saved_toast, displayName),
+                Toast.LENGTH_LONG
+            ).show()
+            loadDashboard()
         }
     }
 
     private val pinLauncher = registerForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+        ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK) {
-            // PIN введён верно — перезапускаем onCreate для инициализации
             recreate()
         } else {
-            // Пользователь закрыл без ввода — выходим
             finish()
         }
     }
 
+    // ==================== ЖИЗНЕННЫЙ ЦИКЛ ====================
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Проверка PIN-кода
+        // 1. PIN-код
         if (PinActivity.isPinSet(this) && !ScanDocApp.isUnlocked) {
             pinLauncher.launch(PinActivity.createIntent(this, PinActivity.MODE_VERIFY))
             return
         }
 
+        // 2. Онбординг
         val prefs = getSharedPreferences("app_prefs", MODE_PRIVATE)
         if (!prefs.getBoolean("onboarding_completed", false)) {
             startActivity(Intent(this, OnboardingActivity::class.java))
@@ -78,19 +83,19 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // OpenCV
+        // 3. OpenCV
         opencvLoaded = OpenCVLoader.initLocal()
         if (!opencvLoaded) {
             Log.e(TAG, "OpenCV failed to load")
             Toast.makeText(this, getString(R.string.main_opencv_error), Toast.LENGTH_LONG).show()
         }
 
-        // Файловая система
+        // 4. Файловая система
         FileManager.init(this)
         FileManager.cleanCache(this)
 
         setupListeners()
-        loadDashboard()
+        // loadDashboard вызовется из onResume (всегда идёт после onCreate)
     }
 
     override fun onResume() {
@@ -98,32 +103,16 @@ class MainActivity : AppCompatActivity() {
         if (opencvLoaded) loadDashboard()
     }
 
-    private fun setupListeners() {
-        binding.menuButton.setOnClickListener {
-            binding.drawerLayout.open()
-        }
+    // ==================== НАВИГАЦИЯ ====================
 
-        binding.scanCard.setOnClickListener {
-            if (opencvLoaded) {
-                val intent = Intent(this, CameraActivity::class.java).apply {
-                    putExtra("multiPageMode", false)
-                }
-                cameraLauncher.launch(intent)
-            } else {
-                Toast.makeText(this, getString(R.string.main_opencv_unavailable), Toast.LENGTH_SHORT).show()
-            }
-        }
+    private fun setupListeners() {
+        binding.menuButton.setOnClickListener { binding.drawerLayout.open() }
+
+        binding.scanCard.setOnClickListener { launchCamera(multiPage = false) }
 
         binding.multiScanCard.setOnClickListener {
-            if (opencvLoaded) {
-                PageRepository.clear()
-                val intent = Intent(this, CameraActivity::class.java).apply {
-                    putExtra("multiPageMode", true)
-                }
-                cameraLauncher.launch(intent)
-            } else {
-                Toast.makeText(this, getString(R.string.main_opencv_unavailable), Toast.LENGTH_SHORT).show()
-            }
+            PageRepository.clear()
+            launchCamera(multiPage = true)
         }
 
         binding.allDocumentsButton.setOnClickListener {
@@ -147,22 +136,34 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Загружает документы, обновляет статистику и список недавних.
-     */
+    private fun launchCamera(multiPage: Boolean) {
+        if (!opencvLoaded) {
+            Toast.makeText(this, getString(R.string.main_opencv_unavailable), Toast.LENGTH_SHORT).show()
+            return
+        }
+        val intent = Intent(this, CameraActivity::class.java).apply {
+            putExtra("multiPageMode", multiPage)
+        }
+        cameraLauncher.launch(intent)
+    }
+
+    // ==================== DASHBOARD ====================
+
     private fun loadDashboard() {
         lifecycleScope.launch {
             val files = withContext(Dispatchers.IO) {
                 val documentsDir = File(filesDir, "Documents")
-                if (documentsDir.exists()) {
-                    documentsDir.listFiles { f -> f.extension == "pdf" }
-                        ?.sortedByDescending { it.lastModified() }
-                        ?.toList() ?: emptyList()
-                } else emptyList()
+                if (!documentsDir.exists()) return@withContext emptyList<File>()
+
+                documentsDir.listFiles { f ->
+                    f.isFile && f.extension.lowercase(Locale.ROOT) in allowedExtensions
+                }?.sortedByDescending { file ->
+                    // Сортируем по реальному timestamp (с учётом бэкапов)
+                    getFileTimestamp(file)
+                }?.toList() ?: emptyList()
             }
 
             binding.documentCountText.text = files.size.toString()
-
             binding.greetingText.text = getGreeting()
 
             if (files.isEmpty()) {
@@ -171,58 +172,70 @@ class MainActivity : AppCompatActivity() {
             } else {
                 binding.recentSection.visibility = View.VISIBLE
                 binding.placeholderLayout.visibility = View.GONE
-
-                // Показываем 3 последних
-                val recent = files.take(3)
-                renderRecentDocuments(recent)
+                renderRecentDocuments(files.take(3))
             }
         }
     }
 
-    /**
-     * Рисует список последних документов (до 3 штук).
-     */
     private fun renderRecentDocuments(files: List<File>) {
         binding.recentContainer.removeAllViews()
-
         val inflater = LayoutInflater.from(this)
+
         files.forEach { file ->
             val row = inflater.inflate(R.layout.item_recent_document, binding.recentContainer, false)
 
-            val thumb = row.findViewById<ImageView>(R.id.recentThumb)
-            val title = row.findViewById<TextView>(R.id.recentTitle)
-            val date = row.findViewById<TextView>(R.id.recentDate)
+            row.findViewById<TextView>(R.id.recentTitle).text = file.nameWithoutExtension
 
-            title.text = file.nameWithoutExtension
-            date.text = dateFormatter.format(Date(file.lastModified()))
+            val timestamp = getFileTimestamp(file)
+            row.findViewById<TextView>(R.id.recentDate).text = if (timestamp > 0L) {
+                dateFormatter.format(Date(timestamp))
+            } else {
+                "—"
+            }
 
             val thumbFile = File(filesDir, "Thumbnails/${file.nameWithoutExtension}_thumb.jpg")
             Glide.with(this)
                 .load(thumbFile)
                 .placeholder(R.drawable.placeholder_pdf)
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .into(thumb)
+                .into(row.findViewById<ImageView>(R.id.recentThumb))
 
             row.setOnClickListener {
-                DocumentActions.openPdf(this, file)
+                DocumentActions.openFile(this, file)
             }
 
             binding.recentContainer.addView(row)
         }
     }
 
-    private fun getGreeting(): String {
-        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-        return when (hour) {
-            in 5..11 -> "Доброе утро! Готовы сканировать?"
-            in 12..17 -> "Добрый день! Готовы сканировать?"
-            in 18..22 -> "Добрый вечер! Готовы сканировать?"
-            else -> "Доброй ночи! Работаем?"
+    /**
+     * Возвращает корректный timestamp файла.
+     * Если lastModified() < 2000 года (файл восстановлен из бэкапа) — парсит дату из имени.
+     */
+    private fun getFileTimestamp(file: File): Long {
+        val lastMod = file.lastModified()
+        val year2000 = 946684800000L
+
+        if (lastMod > year2000) return lastMod
+
+        val match = Regex("(\\d{8}_\\d{6})").find(file.nameWithoutExtension) ?: return lastMod
+        return try {
+            fileNameFormatter.parse(match.value)?.time ?: lastMod
+        } catch (e: Exception) {
+            lastMod
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
+    // ==================== ПРИВЕТСТВИЕ ====================
+
+    private fun getGreeting(): String {
+        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        return when (hour) {
+            in 5..11 -> getString(R.string.main_greeting_morning)
+            in 12..17 -> getString(R.string.main_greeting_day)
+            in 18..22 -> getString(R.string.main_greeting_evening)
+            else -> getString(R.string.main_greeting_night)
+        }
     }
 
     companion object {

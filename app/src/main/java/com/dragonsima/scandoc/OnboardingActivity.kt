@@ -3,12 +3,20 @@ package com.dragonsima.scandoc
 import android.content.Intent
 import android.os.Bundle
 import android.widget.Button
+import androidx.activity.OnBackPressedCallback
 import androidx.annotation.StringRes
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.edit
 import androidx.viewpager2.widget.ViewPager2
 import androidx.viewpager2.widget.ViewPager2.OnPageChangeCallback
 
 class OnboardingActivity : AppCompatActivity() {
+
+    companion object {
+        private const val TAG = "OnboardingActivity"
+        private const val PREFS_APP = "app_prefs"
+        private const val KEY_ONBOARDING_DONE = "onboarding_completed"
+    }
 
     private lateinit var viewPager: ViewPager2
     private lateinit var nextButton: Button
@@ -35,9 +43,9 @@ class OnboardingActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val prefs = getSharedPreferences("app_prefs", MODE_PRIVATE)
-        if (prefs.getBoolean("onboarding_completed", false)) {
-            // Уже пройден — сразу на главный экран
+        // Уже пройден — сразу на главную
+        val prefs = getSharedPreferences(PREFS_APP, MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_ONBOARDING_DONE, false)) {
             startActivity(Intent(this, MainActivity::class.java))
             finish()
             return
@@ -49,7 +57,11 @@ class OnboardingActivity : AppCompatActivity() {
         nextButton = findViewById(R.id.nextButton)
         skipButton = findViewById(R.id.skipButton)
 
-        viewPager.adapter = OnboardingAdapter(this, pages)
+        viewPager.adapter = OnboardingAdapter(pages)
+        skipButton.text = getString(R.string.onboarding_skip)
+
+        // Явная установка текста для первой страницы
+        updateNextButtonText(0)
 
         nextButton.setOnClickListener {
             if (viewPager.currentItem < pages.size - 1) {
@@ -59,25 +71,33 @@ class OnboardingActivity : AppCompatActivity() {
             }
         }
 
-        skipButton.setOnClickListener {
-            finishOnboarding()
-        }
-        skipButton.text = getString(R.string.onboarding_skip)
+        skipButton.setOnClickListener { finishOnboarding() }
 
         viewPager.registerOnPageChangeCallback(object : OnPageChangeCallback() {
             override fun onPageSelected(position: Int) {
-                nextButton.text = if (position == pages.size - 1) {
-                    getString(R.string.onboarding_start)
-                } else {
-                    getString(R.string.onboarding_next)
-                }
+                updateNextButtonText(position)
+            }
+        })
+
+        // Back = пропустить онбординг (не блокировать пользователя)
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                finishOnboarding()
             }
         })
     }
 
+    private fun updateNextButtonText(position: Int) {
+        nextButton.text = if (position == pages.size - 1) {
+            getString(R.string.onboarding_start)
+        } else {
+            getString(R.string.onboarding_next)
+        }
+    }
+
     private fun finishOnboarding() {
-        val prefs = getSharedPreferences("app_prefs", MODE_PRIVATE)
-        prefs.edit().putBoolean("onboarding_completed", true).apply()
+        val prefs = getSharedPreferences(PREFS_APP, MODE_PRIVATE)
+        prefs.edit { putBoolean(KEY_ONBOARDING_DONE, true) }
 
         startActivity(Intent(this, MainActivity::class.java))
         finish()

@@ -5,21 +5,23 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Внешнее свечение луча — оранжевое -->
-    <path
-        android:strokeColor="#4DF97316"
-        android:strokeWidth="16"
-        android:strokeLineCap="round"
-        android:pathData="M8,54 L100,54" />
+    <!-- ===== КРАСНЫЙ ЛУЧ СКАНЕРА ===== -->
 
-    <!-- Средний слой свечения — оранжевый -->
+    <!-- Внешнее свечение -->
     <path
-        android:strokeColor="#80F97316"
-        android:strokeWidth="8"
+        android:strokeColor="#4DEF4444"
+        android:strokeWidth="18"
         android:strokeLineCap="round"
-        android:pathData="M8,54 L100,54" />
+        android:pathData="M6,54 L102,54" />
 
-    <!-- Ядро луча — градиент оранж → красный -->
+    <!-- Средний слой -->
+    <path
+        android:strokeColor="#80EF4444"
+        android:strokeWidth="9"
+        android:strokeLineCap="round"
+        android:pathData="M6,54 L102,54" />
+
+    <!-- Ядро луча с градиентом (ярко в центре, затухание к краям) -->
     <path android:pathData="M0,52 L108,52 L108,56 L0,56 Z">
         <aapt:attr name="android:fillColor">
             <gradient
@@ -28,31 +30,17 @@
                 android:startY="54"
                 android:endX="108"
                 android:endY="54"
-                android:startColor="#00F97316"
-                android:centerColor="#FB923C"
-                android:endColor="#00EF4444" />
+                android:startColor="#00EF4444"
+                android:centerColor="#FF3B30"
+                android:endColor="#00DC2626" />
         </aapt:attr>
     </path>
 
-    <!-- Яркая «вспышка» в центре луча — белая -->
-    <path android:pathData="M46,53 L62,53 L62,55 L46,55 Z">
-        <aapt:attr name="android:fillColor">
-            <gradient
-                android:type="linear"
-                android:startX="46"
-                android:startY="54"
-                android:endX="62"
-                android:endY="54"
-                android:startColor="#00FFFFFF"
-                android:centerColor="#FFFFFF"
-                android:endColor="#00FFFFFF" />
-        </aapt:attr>
-    </path>
+    <!-- ===== БУКВА S (та, что тебе понравилась) ===== -->
 
-    <!-- Буква S -->
     <path
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="8"
+        android:strokeWidth="9"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
         android:pathData="M64,42
@@ -65,4 +53,5 @@
                           Q66,72 59,72
                           L49,72
                           Q42,72 42,64" />
+
 </vector>
